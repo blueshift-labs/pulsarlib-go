@@ -7,7 +7,7 @@ Learn more about Pulsar at https://pulsar.apache.org
 
 ## About this library
 
-This library is a wrapper on top of [pulsar-client-go](github.com/apache/pulsar-client-go v0.4.0)
+This library is a wrapper on top of [pulsar-client-go](github.com/apache/pulsar-client-go)
 It makes producing and consuming from pulsar topics very easy and abstracts all the complexities. Additionally this library provides Admin API for pulsar administration.
 
 ## Usage 
