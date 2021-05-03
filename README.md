@@ -1,4 +1,4 @@
-![logo](site2/website/static/img/pulsar.svg)
+## About Pulsar 
 
 Pulsar is a distributed pub-sub messaging platform with a very
 flexible messaging model and an intuitive client API.
@@ -11,9 +11,14 @@ This library is a wrapper on top of [pulsar-client-go](github.com/apache/pulsar-
 It makes producing and consuming from pulsar topics very easy and abstracts all the complexities. Additionally this library provides Admin API for pulsar administration.
 
 ## Usage 
+Add the following value to GOPRIVATE
+Without this the build might fail.
+```
+export GOPRIVATE="github.com/blueshift-labs:$GOPRIVATE"
+```
 Import the following module
 ```go
-import github.com/blueshift-labs/pulsarlib-go/pulsarlib
+import "github.com/blueshift-labs/pulsarlib-go/pulsarlib"
 ```
 Initialize the library. This need to be done only once in the whole lifecycle of your process
 ```go
@@ -119,6 +124,7 @@ fmt.Println("Consumed messages stats:", stats)
 ### AdminAPIs
 The following admin APIs are provided by this library
 ```go
+//Available APIs
 CreateTenant(tenantID string, adminRoles []string, allowedClusters []string) error
 DeleteTenant(tenantID string) error
 CreateNamespace(tenantID string, namespace string) error
