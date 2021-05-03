@@ -40,14 +40,14 @@ if err != nil {
 messages := []*pulsarlib.Message{
     &pulsarlib.Message{
         Key: "message-1",
-        Value: "This is the first message",
+        Value: []byte("This is the first message"),
         Properties: map[string]string{
             "message-type": "string"
         }
     },
     &pulsarlib.Message{
         Key: "message-2",
-        Value: "This is the second message",
+        Value: []byte("This is the second message"),
         Properties: map[string]string{
             "message-type": "string"
         }
