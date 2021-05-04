@@ -158,7 +158,7 @@ func (c *consumer) messageFetcher() {
 		ctx, canc := context.WithCancel(c.ctx)
 		message, err := c.pulsarc.Receive(ctx)
 		if err != nil && err != context.Canceled {
-			log.Fatalf("Error occured in fetching a message. Error: %v", err)
+			log.Printf("Error occured in fetching a message. Error: %v", err)
 		}
 		canc()
 
