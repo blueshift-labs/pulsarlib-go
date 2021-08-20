@@ -3,11 +3,24 @@ package pulsarlib
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strings"
 )
+
+var messageIDLatest = map[string]interface{}{
+	"ledgerId":       9223372036854775807,
+	"entryId":        9223372036854775807,
+	"partitionIndex": -1,
+}
+var messageIDEarliest = map[string]interface{}{
+	"ledgerId":       -1,
+	"entryId":        -1,
+	"partitionIndex": -1,
+}
 
 func CreateTenant(tenantID string, adminRoles []string, allowedClusters []string) error {
 	//Check if InitMessaging was done prior to this call
@@ -432,4 +445,39 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 		return result, err
 	}
 	return result, nil
+}
+func CreateSubscriptionOnTopic(tenantID, nameSpace, topicName, subscriptionName, position string) error {
+	var requestBody map[string]interface{}
+	if strings.EqualFold(position, "earliest") {
+		requestBody = messageIDEarliest
+	} else if strings.EqualFold(position, "latest") {
+		requestBody = messageIDLatest
+	} else {
+		return errors.New("invalid position - must be either 'earliest' or 'latest'")
+	}
+
+	putUrl := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, nameSpace, topicName, subscriptionName),
+	}).String()
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return errors.New("failed to marshal request body while creating subscription on topic - " + err.Error())
+	}
+	req, err := http.NewRequest(http.MethodPut, putUrl, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := http.DefaultClient.Do(req)
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Error in creating subscription, Http Response [%v]", resp.StatusCode)
+	}
+	return nil
 }
