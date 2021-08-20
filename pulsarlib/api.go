@@ -446,9 +446,8 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 	}
 	return result, nil
 }
-
-func CreateSubscriptionOnTopic(accountUUID, clusterName, indexName, position string) error {
-	requestBody := make(map[string]interface{})
+func CreateSubscriptionOnTopic(tenantID, nameSpace, topicName, subscriptionName, position string) error {
+	var requestBody map[string]interface{}
 	if strings.EqualFold(position, "earliest") {
 		requestBody = messageIDEarliest
 	} else if strings.EqualFold(position, "latest") {
@@ -459,8 +458,8 @@ func CreateSubscriptionOnTopic(accountUUID, clusterName, indexName, position str
 
 	putUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", "localhost", "8080"),
-		Path:   fmt.Sprintf("admin/v2/persistent/indexing/%s/events.json/subscription/elasticsearch.%s.%s", accountUUID, clusterName, indexName),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, nameSpace, topicName, subscriptionName),
 	}).String()
 
 	jsonBody, err := json.Marshal(requestBody)
