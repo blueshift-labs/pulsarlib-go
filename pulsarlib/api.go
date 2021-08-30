@@ -447,7 +447,7 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 	return result, nil
 }
 
-func CreateSubscriptionOnTopic(tenantID, namespace, topicname, subscription, position string) error {
+func CreateSubscriptionOnTopic(tenantID, namespace, topic, subscription, position string) error {
 	var requestBody map[string]interface{}
 	if strings.EqualFold(position, "earliest") {
 		requestBody = messageIDEarliest
@@ -460,7 +460,7 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topicname, subscription, pos
 	putUrl := (&url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
-		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topicname, subscription),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topic, subscription),
 	}).String()
 
 	jsonBody, err := json.Marshal(requestBody)
@@ -483,11 +483,11 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topicname, subscription, pos
 	return nil
 }
 
-func DeleteSubscriptionOnTopic(tenantID, namespace, topicname, subscription string) error {
+func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) error {
 	putUrl := (&url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
-		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topicname, subscription),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topic, subscription),
 	}).String()
 
 	req, err := http.NewRequest(http.MethodDelete, putUrl, nil)
