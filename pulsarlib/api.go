@@ -446,7 +446,8 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 	}
 	return result, nil
 }
-func CreateSubscriptionOnTopic(tenantID, nameSpace, topicName, subscriptionName, position string) error {
+
+func CreateSubscriptionOnTopic(tenantID, namespace, topicname, subscription, position string) error {
 	var requestBody map[string]interface{}
 	if strings.EqualFold(position, "earliest") {
 		requestBody = messageIDEarliest
@@ -459,7 +460,7 @@ func CreateSubscriptionOnTopic(tenantID, nameSpace, topicName, subscriptionName,
 	putUrl := (&url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
-		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, nameSpace, topicName, subscriptionName),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topicname, subscription),
 	}).String()
 
 	jsonBody, err := json.Marshal(requestBody)
@@ -478,6 +479,29 @@ func CreateSubscriptionOnTopic(tenantID, nameSpace, topicName, subscriptionName,
 	}
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("Error in creating subscription, Http Response [%v]", resp.StatusCode)
+	}
+	return nil
+}
+
+func DeleteSubscriptionOnTopic(tenantID, namespace, topicname, subscription string) error {
+	putUrl := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topicname, subscription),
+	}).String()
+
+	req, err := http.NewRequest(http.MethodDelete, putUrl, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := http.DefaultClient.Do(req)
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Error in deleting subscription, Http Response [%v]", resp.StatusCode)
 	}
 	return nil
 }
