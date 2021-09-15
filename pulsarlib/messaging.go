@@ -136,8 +136,9 @@ func (p *producer) Stop() {
 func (m *messaging) processMessageWorker() {
 	for messageItem := range m.messageCh {
 		m := &Message{
-			Key:   messageItem.message.Key(),
-			Value: messageItem.message.Payload(),
+			Key:        messageItem.message.Key(),
+			Value:      messageItem.message.Payload(),
+			Properties: messageItem.message.Properties(),
 		}
 		messageItem.handler.HandleMessage(m)
 		messageItem.pulsarc.Ack(messageItem.message)
