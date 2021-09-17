@@ -505,3 +505,42 @@ func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) 
 	}
 	return nil
 }
+
+func GetSubscriptionsOnAPartitionedTopic(tenantID, namespace, topic string) (subscriptionsOnTopic []string, err error) {
+	type statsStruct struct {
+		Subscriptions map[string]interface{} `json:"subscriptions"`
+	}
+	var response statsStruct
+
+	url := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/partitioned-stats", tenantID, namespace, topic),
+	}).String()
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if resp.StatusCode > 200 {
+		return nil, fmt.Errorf("Status code %d Error while fetching subscriptions on topic - %s", resp.StatusCode, err.Error())
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Error while reading pulsar response of subscriptions on topic - %s", err.Error())
+	}
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return nil, fmt.Errorf("Error while unmarshaling pulsar response of subscriptions on topic - %s", err.Error())
+	}
+
+	for subscriptionName, _ := range response.Subscriptions {
+		subscriptionsOnTopic = append(subscriptionsOnTopic, subscriptionName)
+	}
+
+	return
+
+}
