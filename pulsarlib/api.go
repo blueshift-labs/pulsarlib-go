@@ -520,7 +520,7 @@ func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOn
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	resp, err := http.DefaultClient.Do(req)
-	if resp.StatusCode > 200 {
+	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("Status code %d Error while fetching subscriptions on topic - %s", resp.StatusCode, err.Error())
 	}
 	body, err := ioutil.ReadAll(resp.Body)
