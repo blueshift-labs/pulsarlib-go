@@ -506,16 +506,11 @@ func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) 
 	return nil
 }
 
-func GetSubscriptionsOnAPartitionedTopic(tenantID, namespace, topic string) (subscriptionsOnTopic []string, err error) {
-	type statsStruct struct {
-		Subscriptions map[string]interface{} `json:"subscriptions"`
-	}
-	var response statsStruct
-
+func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOnTopic []string, err error) {
 	url := (&url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
-		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/partitioned-stats", tenantID, namespace, topic),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscriptions", tenantID, namespace, topic),
 	}).String()
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -532,15 +527,10 @@ func GetSubscriptionsOnAPartitionedTopic(tenantID, namespace, topic string) (sub
 	if err != nil {
 		return nil, fmt.Errorf("Error while reading pulsar response of subscriptions on topic - %s", err.Error())
 	}
-	err = json.Unmarshal(body, &response)
+	err = json.Unmarshal(body, &subscriptionsOnTopic)
 	if err != nil {
 		return nil, fmt.Errorf("Error while unmarshaling pulsar response of subscriptions on topic - %s", err.Error())
 	}
-
-	for subscriptionName, _ := range response.Subscriptions {
-		subscriptionsOnTopic = append(subscriptionsOnTopic, subscriptionName)
-	}
-
 	return
 
 }
