@@ -63,7 +63,11 @@ func CreateTenant(tenantID string, adminRoles []string, allowedClusters []string
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in creating tenant, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in creating tenant, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in creating tenant, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -97,8 +101,13 @@ func DeleteTenant(tenantID string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in deleting tenant, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in deleting tenant, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in deleting tenant, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
+
 	return nil
 }
 
@@ -132,7 +141,11 @@ func CreateNamespace(tenantID string, namespace string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in creating namespace, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in creating namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in creating namespace, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -167,7 +180,11 @@ func DeleteNamespace(tenantID string, namespace string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in deleting namespace, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in deleting namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in deleting namespace, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -198,7 +215,11 @@ func UnloadNamespace(tenantID string, namespace string) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in unloading namespace, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in unloading namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in unloading namespace, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -209,7 +230,7 @@ func ListTenants() ([]string, error) {
 	getUrl := (&url.URL{
 		Scheme: "http",
 		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
-		Path:   fmt.Sprintf("admin/v2/tenants"),
+		Path:   "admin/v2/tenants",
 	}).String()
 
 	resp, err := http.Get(getUrl)
@@ -284,7 +305,11 @@ func CreateTopic(tenantID string, namespace string, topic string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in creating topic, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in creating topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in creating topic, Http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -318,7 +343,11 @@ func DeleteTopic(tenantID string, namespace string, topic string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in deleting topic, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in deleting topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in deleting topic, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -382,7 +411,11 @@ func CreatePartitionedTopic(tenantID string, namespace string, topic string, par
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in creating topic, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in creating topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in creating topic, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -416,7 +449,11 @@ func DeletePartionedTopic(tenantID string, namespace string, topic string) error
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in deleting topic, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in deleting topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in deleting topic, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
 	}
 	return nil
 }
@@ -474,11 +511,20 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topic, subscription, positio
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, err := http.DefaultClient.Do(req)
 
+	if err != nil {
+		return err
+	}
+
 	if resp.StatusCode == http.StatusConflict {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("Error in creating subscription, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in creating subscription, http Response [%v]; error while reading response body - [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in creating subscription, Http Response [%v]; and response - [%s]", resp.StatusCode, string(respBody))
+
 	}
 	return nil
 }
@@ -497,12 +543,22 @@ func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) 
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	resp, err := http.DefaultClient.Do(req)
 
+	if err != nil {
+		return err
+	}
+
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
+
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("error in deleting subscription, Http Response [%v]", resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in deleting subscription, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in deleting subscription, http Response [%v]; response - [%s]", resp.StatusCode, string(respBody))
 	}
+
 	return nil
 }
 
@@ -520,13 +576,24 @@ func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOn
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 
 	resp, err := http.DefaultClient.Do(req)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("status code %d Error while fetching subscriptions on topic - %s", resp.StatusCode, err.Error())
+
+	if err != nil {
+		return nil, err
 	}
+
 	body, err := ioutil.ReadAll(resp.Body)
+
 	if err != nil {
 		return nil, fmt.Errorf("error while reading pulsar response of subscriptions on topic - %s", err.Error())
 	}
+
+	if resp.StatusCode >= 400 {
+		if err != nil {
+			return nil, fmt.Errorf("status code %d Error while fetching subscriptions on topic - %s", resp.StatusCode, err.Error())
+		}
+		return nil, fmt.Errorf("status code %d Error while fetching subscriptions on topic - %s", resp.StatusCode, string(body))
+	}
+
 	err = json.Unmarshal(body, &subscriptionsOnTopic)
 	if err != nil {
 		return nil, fmt.Errorf("error while unmarshaling pulsar response of subscriptions on topic - %s", err.Error())
