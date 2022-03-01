@@ -136,8 +136,9 @@ func (p *producer) Stop() {
 func (m *messaging) processMessageWorker() {
 	for messageItem := range m.messageCh {
 		m := &Message{
-			Key:   messageItem.message.Key(),
-			Value: messageItem.message.Payload(),
+			Key:        messageItem.message.Key(),
+			Value:      messageItem.message.Payload(),
+			Properties: messageItem.message.Properties(),
 		}
 		messageItem.handler.HandleMessage(m)
 		messageItem.pulsarc.Ack(messageItem.message)
@@ -381,6 +382,8 @@ func CreateProducer(tenantID string, namespace string, topic string) (Producer, 
 	topicPath := fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, topic)
 	p, err := msging.client.CreateProducer(pulsar.ProducerOptions{
 		Topic: topicPath,
+		// We wanted to send error in case queue is full, this will give the sender a chance to requeue or retry msg
+		DisableBlockIfQueueFull: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Error in creating producer. Error %v", err)
