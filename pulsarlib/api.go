@@ -150,6 +150,48 @@ func CreateNamespace(tenantID string, namespace string) error {
 	return nil
 }
 
+func SetNamespaceRetention(tenantID string, namespace string, retentionInMB int64, retentionInMinutes int64) error {
+	//Check if InitMessaging was done prior to this call
+	if msging == nil {
+		return fmt.Errorf("initMessaging not called yet")
+	}
+
+	updateURL := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s/retention", tenantID, namespace),
+	}).String()
+
+	r := map[string]interface{}{
+		"retentionTimeInMinutes": retentionInMinutes,
+		"retentionSizeInMB":      retentionInMB,
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("Error creating request body for updating retetion")
+	}
+	req, err := http.NewRequest(http.MethodPost, updateURL, bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	// set the request header Content-Type for json
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in updating namespace retention, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in updating namespace retention, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 func DeleteNamespace(tenantID string, namespace string) error {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
