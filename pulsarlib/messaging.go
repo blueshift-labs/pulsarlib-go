@@ -72,10 +72,11 @@ type messaging struct {
 }
 
 type consumer struct {
-	topics  []string
-	pulsarc pulsar.Consumer
-	stats   Stats
-	handler Handler
+	topics        []string
+	topicsPattern string
+	pulsarc       pulsar.Consumer
+	stats         Stats
+	handler       Handler
 
 	//Context to manage the consumer
 	ctx  context.Context
@@ -355,6 +356,56 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 		pulsarc: c,
 		stats:   Stats{},
 		handler: handler,
+
+		ctx:  ctx,
+		canc: canc,
+
+		pauseConsumer:    false,
+		consumerPausedCh: make(chan bool, 1),
+		unpauseCh:        make(chan bool, 1),
+
+		messageWg:      &sync.WaitGroup{},
+		consumerStopWg: &sync.WaitGroup{},
+	}
+	return consumer, nil
+}
+
+/*
+	This API will create a Consumer for a topics matching the topics pattern.
+	The handler passed should implement the Handler interface from this module.
+	The consumer will create the subscription and be in a passive state until Start() is called.
+	The consumer can be Paused and Unpaused at any point.
+	The Pause() function will flushout the already received messages and pause receiving any further messages.
+	The Unpause() function will resume receiving messages.
+	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
+	The Unsubscribe() function can be used if subscription needs to be deleted.
+	The Stats() function provides the stats for messages consumed.
+
+	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
+	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
+*/
+func CreateRegexConsumer(tenantID string, namespace string, topicsPattern string, subscriptionName string, handler Handler) (Consumer, error) {
+	//Check if InitMessaging was done prior to this call
+	if msging == nil {
+		return nil, fmt.Errorf("InitMessaging not called yet")
+	}
+
+	c, err := msging.client.Subscribe(pulsar.ConsumerOptions{
+		TopicsPattern:    topicsPattern,
+		SubscriptionName: subscriptionName,
+		Type:             pulsar.Shared,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
+	}
+
+	ctx, canc := context.WithCancel(context.Background())
+
+	consumer := &consumer{
+		topicsPattern: topicsPattern,
+		pulsarc:       c,
+		stats:         Stats{},
+		handler:       handler,
 
 		ctx:  ctx,
 		canc: canc,
