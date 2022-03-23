@@ -65,10 +65,10 @@ type messageItem struct {
 }
 
 type messaging struct {
-	nWorkers   int
-	messageCh  chan *messageItem
-	client     pulsar.Client
-	pulsarHost string
+	nWorkers               int
+	messageCh              chan *messageItem
+	client                 pulsar.Client
+	pulsarHost, pulsarPort string
 }
 
 type consumer struct {
@@ -280,11 +280,12 @@ func (c *consumer) Stats() Stats {
 	It will do all the connection initialiations.
 	workerCount is the number of message processing workers.
 */
-func InitMessaging(workerCount int, host string) error {
+func InitMessaging(workerCount int, host, port string) error {
 	msging = &messaging{
 		nWorkers:   workerCount,
 		messageCh:  make(chan *messageItem, workerCount*2),
 		pulsarHost: host,
+		pulsarPort: port,
 	}
 
 	//Start the processMessage workers
@@ -295,7 +296,7 @@ func InitMessaging(workerCount int, host string) error {
 	client, err := pulsar.NewClient(pulsar.ClientOptions{
 		URL: (&url.URL{
 			Scheme: "pulsar",
-			Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "6650"),
+			Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarPort),
 		}).String(),
 		OperationTimeout:  30 * time.Second,
 		ConnectionTimeout: 30 * time.Second,
