@@ -643,3 +643,32 @@ func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOn
 	return
 
 }
+
+func ResetSubscriptionOnTopic(tenantID string, namespace string, topic string, subscription string, timestampMilliseconds int64) (err error) {
+	url := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s/resetcursor/%d", tenantID, namespace, topic, subscription, timestampMilliseconds),
+	}).String()
+
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error while resetting subscription on topic - %s", err.Error())
+	}
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("status code %d Error while resetting subscriptions on topic - %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
