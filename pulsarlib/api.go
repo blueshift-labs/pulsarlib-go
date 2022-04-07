@@ -30,7 +30,7 @@ func CreateTenant(tenantID string, adminRoles []string, allowedClusters []string
 
 	createUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/tenants/%s", tenantID),
 	}).String()
 
@@ -80,7 +80,7 @@ func DeleteTenant(tenantID string) error {
 
 	deleteUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/tenants/%s", tenantID),
 	}).String()
 
@@ -119,7 +119,7 @@ func CreateNamespace(tenantID string, namespace string) error {
 
 	createUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s", tenantID, namespace),
 	}).String()
 
@@ -158,7 +158,7 @@ func SetNamespaceRetention(tenantID string, namespace string, retentionInMB int6
 
 	updateURL := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s/retention", tenantID, namespace),
 	}).String()
 
@@ -200,7 +200,7 @@ func DeleteNamespace(tenantID string, namespace string) error {
 
 	deleteUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s", tenantID, namespace),
 	}).String()
 
@@ -239,7 +239,7 @@ func UnloadNamespace(tenantID string, namespace string) error {
 
 	unloadUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s/unload", tenantID, namespace),
 	}).String()
 
@@ -271,7 +271,7 @@ func ListTenants() ([]string, error) {
 
 	getUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   "admin/v2/tenants",
 	}).String()
 
@@ -297,7 +297,7 @@ func ListNamespaces(tenantID string) ([]string, error) {
 
 	getUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/namespaces/%s", tenantID),
 	}).String()
 
@@ -326,7 +326,7 @@ func CreateTopic(tenantID string, namespace string, topic string) error {
 
 	createUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s", tenantID, namespace, topic),
 	}).String()
 
@@ -364,7 +364,7 @@ func DeleteTopic(tenantID string, namespace string, topic string) error {
 
 	deleteUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s", tenantID, namespace, topic),
 	}).String()
 
@@ -399,7 +399,7 @@ func ListTopics(tenantID string, namespace string) ([]string, error) {
 
 	getUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s", tenantID, namespace),
 	}).String()
 
@@ -428,7 +428,7 @@ func CreatePartitionedTopic(tenantID string, namespace string, topic string, par
 
 	createUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/partitions", tenantID, namespace, topic),
 	}).String()
 
@@ -470,7 +470,7 @@ func DeletePartionedTopic(tenantID string, namespace string, topic string) error
 
 	deleteUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/partitions", tenantID, namespace, topic),
 	}).String()
 
@@ -505,7 +505,7 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 
 	getUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/partitioned", tenantID, namespace),
 	}).String()
 
@@ -538,7 +538,7 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topic, subscription, positio
 
 	putUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topic, subscription),
 	}).String()
 
@@ -574,7 +574,7 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topic, subscription, positio
 func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) error {
 	putUrl := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s", tenantID, namespace, topic, subscription),
 	}).String()
 
@@ -607,7 +607,7 @@ func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) 
 func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOnTopic []string, err error) {
 	url := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscriptions", tenantID, namespace, topic),
 	}).String()
 
@@ -647,7 +647,7 @@ func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOn
 func ResetSubscriptionOnTopic(tenantID string, namespace string, topic string, subscription string, timestampMilliseconds int64) (err error) {
 	url := (&url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, "8080"),
+		Host:   fmt.Sprintf("%s:%s", msging.pulsarHost, msging.pulsarHttpPort),
 		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/subscription/%s/resetcursor/%d", tenantID, namespace, topic, subscription, timestampMilliseconds),
 	}).String()
 
