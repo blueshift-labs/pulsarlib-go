@@ -12,6 +12,14 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 )
 
+// Error for retrying failed consumed message. Client can return this error to ensure the message
+// will be enqueued for a given RetryAfter duration.
+type HandleMessageError struct {
+	RetryAfter time.Duration
+}
+
+func (e *HandleMessageError) Error() string { return "error in handling message" }
+
 type Message struct {
 	Key        string
 	Value      []byte
@@ -27,7 +35,9 @@ func (s Stats) IncrementMessageCount(messages uint64) {
 }
 
 type Handler interface {
-	HandleMessage(*Message)
+	// Handle consumed pulsar message. 'ErrHandleMessage' is used to negatively ack message
+	// and requeued to retry after some delay.
+	HandleMessage(*Message) error
 }
 
 type Consumer interface {
@@ -74,12 +84,12 @@ type messaging struct {
 }
 
 type consumer struct {
-	topics        []string
-	topicsPattern string
-	pulsarc       pulsar.Consumer
-	stats         Stats
-	handler       Handler
-
+	topics         []string
+	topicsPattern  string
+	pulsarc        pulsar.Consumer
+	stats          Stats
+	handler        Handler
+	commitInterval uint64
 	//Context to manage the consumer
 	ctx  context.Context
 	canc context.CancelFunc
@@ -143,8 +153,19 @@ func (m *messaging) processMessageWorker() {
 			Value:      messageItem.message.Payload(),
 			Properties: messageItem.message.Properties(),
 		}
-		messageItem.handler.HandleMessage(m)
-		messageItem.pulsarc.Ack(messageItem.message)
+		if err := messageItem.handler.HandleMessage(m); err != nil {
+			if e, ok := err.(*HandleMessageError); ok {
+				if e.RetryAfter <= 0 { // If retry after duration not set, simply don't ack the message
+					messageItem.pulsarc.Nack(messageItem.message)
+				} else {
+					messageItem.pulsarc.ReconsumeLater(messageItem.message, e.RetryAfter)
+				}
+			} else {
+				messageItem.pulsarc.Ack(messageItem.message) // Error of diffrent type, so preserve the default of ack
+			}
+		} else {
+			messageItem.pulsarc.Ack(messageItem.message)
+		}
 		messageItem.wg.Done()
 	}
 }
@@ -182,9 +203,7 @@ func (c *consumer) messageFetcher() {
 
 		//Check if it is a time to commit
 		//Commit is done after every n messages are fetched
-		//TODO Make this interval configurable
-		commitInterval := uint64(100)
-		if (c.stats.TotalMessages % commitInterval) == uint64(0) {
+		if (c.stats.TotalMessages % c.commitInterval) == uint64(0) {
 			//Wait for the fetched messages to be processed first
 			c.messageWg.Wait()
 			c.commit()
@@ -327,6 +346,7 @@ func Cleanup() {
 	The handler passed should implement the Handler interface from this module.
 	The consumer will create the subscription and be in a passive state until Start() is called.
 	The consumer can be Paused and Unpaused at any point.
+	The commitInterval used to commit messages after every n messages are consumed.
 	The Pause() function will flushout the already received messages and pause receiving any further messages.
 	The Unpause() function will resume receiving messages.
 	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
@@ -336,7 +356,7 @@ func Cleanup() {
 	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
 	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
-func CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler) (Consumer, error) {
+func CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler, commitInterval uint64) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
@@ -358,10 +378,11 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 	ctx, canc := context.WithCancel(context.Background())
 
 	consumer := &consumer{
-		topics:  topics,
-		pulsarc: c,
-		stats:   Stats{},
-		handler: handler,
+		topics:         topics,
+		pulsarc:        c,
+		stats:          Stats{},
+		handler:        handler,
+		commitInterval: commitInterval,
 
 		ctx:  ctx,
 		canc: canc,
