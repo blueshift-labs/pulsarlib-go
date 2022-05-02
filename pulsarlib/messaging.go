@@ -12,13 +12,11 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 )
 
-// Error for retrying failed consumed message. Client can return this error to ensure the message
+// Struct for retrying consumed message due to failure. Client can return this struct to ensure the message
 // will be enqueued for a given RetryAfter duration.
-type HandleMessageError struct {
+type RetryMessage struct {
 	RetryAfter time.Duration
 }
-
-func (e *HandleMessageError) Error() string { return "error in handling message" }
 
 type Message struct {
 	Key        string
@@ -35,9 +33,9 @@ func (s Stats) IncrementMessageCount(messages uint64) {
 }
 
 type Handler interface {
-	// Handle consumed pulsar message. 'ErrHandleMessage' is used to negatively ack message
+	// Handle consumed pulsar message. 'RetryMessage' is used to negatively ack message
 	// and requeued to retry after some delay.
-	HandleMessage(*Message) error
+	HandleMessage(*Message) *RetryMessage
 }
 
 type Consumer interface {
@@ -153,18 +151,15 @@ func (m *messaging) processMessageWorker() {
 			Value:      messageItem.message.Payload(),
 			Properties: messageItem.message.Properties(),
 		}
-		if err := messageItem.handler.HandleMessage(m); err != nil {
-			if e, ok := err.(*HandleMessageError); ok {
-				if e.RetryAfter <= 0 { // If retry after duration not set, simply don't ack the message
-					messageItem.pulsarc.Nack(messageItem.message)
-				} else {
-					messageItem.pulsarc.ReconsumeLater(messageItem.message, e.RetryAfter)
-				}
+		retry := messageItem.handler.HandleMessage(m)
+		if retry != nil {
+			if retry.RetryAfter == 0 {
+				messageItem.pulsarc.Nack(messageItem.message)
 			} else {
-				messageItem.pulsarc.Ack(messageItem.message) // Error of diffrent type, so preserve the default of ack
+				messageItem.pulsarc.ReconsumeLater(messageItem.message, retry.RetryAfter)
 			}
 		} else {
-			messageItem.pulsarc.Ack(messageItem.message)
+			messageItem.pulsarc.Ack(messageItem.message) // Error of diffrent type, so preserve the default of ack
 		}
 		messageItem.wg.Done()
 	}
