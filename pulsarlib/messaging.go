@@ -159,7 +159,7 @@ func (m *messaging) processMessageWorker() {
 				messageItem.pulsarc.ReconsumeLater(messageItem.message, retry.RetryAfter)
 			}
 		} else {
-			messageItem.pulsarc.Ack(messageItem.message) // Error of diffrent type, so preserve the default of ack
+			messageItem.pulsarc.Ack(messageItem.message)
 		}
 		messageItem.wg.Done()
 	}
