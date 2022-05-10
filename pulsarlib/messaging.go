@@ -241,6 +241,8 @@ func (c *consumer) Stop() error {
 
 	c.consumerStopWg.Wait()
 	c.consumerRunning = false
+
+	c.pulsarc.Close()
 	return nil
 }
 
