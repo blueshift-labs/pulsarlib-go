@@ -351,7 +351,7 @@ func Cleanup() {
 	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
 	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
-func CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler, commitInterval uint64) (Consumer, error) {
+func CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler, commitInterval uint64, dlqPolicy *pulsar.DLQPolicy) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
@@ -362,10 +362,9 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 		topicArr = append(topicArr, fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, tp))
 	}
 	c, err := msging.client.Subscribe(pulsar.ConsumerOptions{
-		Topics:                      topicArr,
-		SubscriptionName:            subscriptionName,
-		Type:                        pulsar.Shared,
-		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
+		Topics:           topicArr,
+		SubscriptionName: subscriptionName,
+		Type:             pulsar.Shared,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
