@@ -362,9 +362,10 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 		topicArr = append(topicArr, fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, tp))
 	}
 	c, err := msging.client.Subscribe(pulsar.ConsumerOptions{
-		Topics:           topicArr,
-		SubscriptionName: subscriptionName,
-		Type:             pulsar.Shared,
+		Topics:                      topicArr,
+		SubscriptionName:            subscriptionName,
+		Type:                        pulsar.Shared,
+		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
