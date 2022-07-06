@@ -82,12 +82,11 @@ type messaging struct {
 }
 
 type consumer struct {
-	topics         []string
-	topicsPattern  string
-	pulsarc        pulsar.Consumer
-	stats          Stats
-	handler        Handler
-	commitInterval uint64
+	topics        []string
+	topicsPattern string
+	pulsarc       pulsar.Consumer
+	stats         Stats
+	handler       Handler
 	//Context to manage the consumer
 	ctx  context.Context
 	canc context.CancelFunc
@@ -194,14 +193,6 @@ func (c *consumer) messageFetcher() {
 			c.stats.IncrementMessageCount(1)
 
 			msging.messageCh <- messageItem
-		}
-
-		//Check if it is a time to commit
-		//Commit is done after every n messages are fetched
-		if (c.stats.TotalMessages % c.commitInterval) == uint64(0) {
-			//Wait for the fetched messages to be processed first
-			c.messageWg.Wait()
-			c.commit()
 		}
 
 		//Check for a pause signal
@@ -336,6 +327,33 @@ func Cleanup() {
 	msging = nil
 }
 
+type InitialPosition int
+
+const (
+	// Latest position which means the start consuming position will be the last message
+	Latest InitialPosition = iota
+
+	// Earliest position which means the start consuming position will be the first message
+	Earliest
+)
+
+type ConsumerOpts struct {
+	SubscriptionName string
+	RetryEnabled     bool
+	InitialPosition  InitialPosition
+}
+
+func toInitialPosition(p InitialPosition) pulsar.SubscriptionInitialPosition {
+	switch p {
+	case Latest:
+		return pulsar.SubscriptionPositionLatest
+	case Earliest:
+		return pulsar.SubscriptionPositionEarliest
+	}
+
+	return pulsar.SubscriptionPositionEarliest
+}
+
 /*
 	This API will create a Consumer for a particular topic.
 	The handler passed should implement the Handler interface from this module.
@@ -351,7 +369,7 @@ func Cleanup() {
 	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
 	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
-func CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler, commitInterval uint64) (Consumer, error) {
+func CreateConsumer(tenantID, namespace string, topics []string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
@@ -361,12 +379,13 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 	for _, tp := range topics {
 		topicArr = append(topicArr, fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, tp))
 	}
-	c, err := msging.client.Subscribe(pulsar.ConsumerOptions{
+	consumerOptions := pulsar.ConsumerOptions{
 		Topics:                      topicArr,
-		SubscriptionName:            subscriptionName,
+		SubscriptionName:            opts.SubscriptionName,
 		Type:                        pulsar.Shared,
-		SubscriptionInitialPosition: pulsar.SubscriptionPositionEarliest,
-	})
+		SubscriptionInitialPosition: toInitialPosition(opts.InitialPosition),
+	}
+	c, err := msging.client.Subscribe(consumerOptions)
 	if err != nil {
 		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
 	}
@@ -374,11 +393,79 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 	ctx, canc := context.WithCancel(context.Background())
 
 	consumer := &consumer{
-		topics:         topics,
-		pulsarc:        c,
-		stats:          Stats{},
-		handler:        handler,
-		commitInterval: commitInterval,
+		topics:  topics,
+		pulsarc: c,
+		stats:   Stats{},
+		handler: handler,
+
+		ctx:  ctx,
+		canc: canc,
+
+		pauseConsumer:    false,
+		consumerPausedCh: make(chan bool, 1),
+		unpauseCh:        make(chan bool, 1),
+
+		messageWg:      &sync.WaitGroup{},
+		consumerStopWg: &sync.WaitGroup{},
+	}
+	return consumer, nil
+}
+
+/*
+	This API will create a Consumer for a particular topic.
+	The handler passed should implement the Handler interface from this module.
+	The consumer will create the subscription and be in a passive state until Start() is called.
+	The consumer can be Paused and Unpaused at any point.
+	The commitInterval used to commit messages after every n messages are consumed.
+	The Pause() function will flushout the already received messages and pause receiving any further messages.
+	The Unpause() function will resume receiving messages.
+	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
+	The Unsubscribe() function can be used if subscription needs to be deleted.
+	The Stats() function provides the stats for messages consumed.
+
+	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
+	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
+    retryEnabled will let the consumer retry message in case of HandleMessage return `RetryMessage` struct.
+*/
+func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handler, opts ConsumerOpts) (Consumer, error) {
+	//Check if InitMessaging was done prior to this call
+	if msging == nil {
+		return nil, fmt.Errorf("InitMessaging not called yet")
+	}
+
+	topicURI := fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, topic)
+
+	consumerOptions := pulsar.ConsumerOptions{
+		Topic:                       topicURI,
+		SubscriptionName:            opts.SubscriptionName,
+		Type:                        pulsar.Shared,
+		SubscriptionInitialPosition: toInitialPosition(opts.InitialPosition),
+	}
+
+	if opts.RetryEnabled {
+		// We wanted to retry message for one complete day before it appended at the back of the DLQ topic.
+		maxDeliveries := uint32((time.Hour * 24) / time.Second)
+		consumerOptions.RetryEnable = true
+		consumerOptions.NackRedeliveryDelay = 1 * time.Second
+		consumerOptions.DLQ = &pulsar.DLQPolicy{
+			MaxDeliveries:    maxDeliveries,
+			DeadLetterTopic:  topicURI,
+			RetryLetterTopic: topicURI,
+		}
+	}
+
+	c, err := msging.client.Subscribe(consumerOptions)
+	if err != nil {
+		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
+	}
+
+	ctx, canc := context.WithCancel(context.Background())
+
+	consumer := &consumer{
+		topics:  []string{topic},
+		pulsarc: c,
+		stats:   Stats{},
+		handler: handler,
 
 		ctx:  ctx,
 		canc: canc,
@@ -407,16 +494,17 @@ func CreateConsumer(tenantID string, namespace string, topics []string, subscrip
 	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
 	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
-func CreateRegexConsumer(tenantID string, namespace string, topicsPattern string, subscriptionName string, handler Handler) (Consumer, error) {
+func CreateRegexConsumer(tenantID, namespace, topicsPattern string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
 	}
 
 	c, err := msging.client.Subscribe(pulsar.ConsumerOptions{
-		TopicsPattern:    topicsPattern,
-		SubscriptionName: subscriptionName,
-		Type:             pulsar.Shared,
+		TopicsPattern:               topicsPattern,
+		SubscriptionName:            opts.SubscriptionName,
+		Type:                        pulsar.Shared,
+		SubscriptionInitialPosition: toInitialPosition(opts.InitialPosition),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)

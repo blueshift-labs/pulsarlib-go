@@ -82,8 +82,10 @@ namespace := "my_namespace" //Name of the namespace
 topics := []string{"my-topic1"} //Can consume from multiple topics within a namespace
 subscriptionName := "my-subscription"
 handler := &myHandler{}
-
-consumer, err := pulsarlib.CreateConsumer(tenantID string, namespace string, topics []string, subscriptionName string, handler Handler)
+opts := ConsumerOpts{
+    SubscriptionName: subscriptionName
+}
+consumer, err := pulsarlib.CreateConsumer(tenantID, namespace, topics, handler, opts)
 if err != nil {
     panic("Error publishing messages")
 }
