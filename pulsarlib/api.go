@@ -672,3 +672,43 @@ func ResetSubscriptionOnTopic(tenantID string, namespace string, topic string, s
 	}
 	return nil
 }
+
+func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
+	requestBody := map[string]bool{
+		"allowAutoSubscriptionCreation": true,
+	}
+
+	// https://pulsar.apache.org/admin-rest-api/#operation/getAutoSubscriptionCreation
+	url := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", msging.pulsarHost, msging.pulsarHttpPort),
+		Path:   fmt.Sprintf("admin/v2/namespaces/%s/%s/autoSubscriptionCreation", tenantID, namespace),
+	}).String()
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return errors.New("failed to marshal request body while overriding broker's allowAutoSubscriptionCreation setting for a namespace: " + err.Error())
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return errors.New("failed to create request while overriding broker's allowAutoSubscriptionCreation setting for a namespace: " + err.Error())
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := http.DefaultClient.Do(req)
+
+	if err != nil {
+		return errors.New("failed to execute request while overriding broker's allowAutoSubscriptionCreation setting for a namespace: " + err.Error())
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return nil
+	}
+	if resp.StatusCode >= 400 {
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in overriding broker's allowAutoSubscriptionCreation setting for a namespace, http response [%v]; error while reading response body: %s", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in overriding broker's allowAutoSubscriptionCreation setting for a namespace, http response [%v] and response - [%s]", resp.StatusCode, string(respBody))
+
+	}
+	return nil
+}
