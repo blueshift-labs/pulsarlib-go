@@ -443,8 +443,8 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 	}
 
 	if opts.RetryEnabled {
-		// We wanted to retry message for one complete day before it appended at the back of the DLQ topic.
-		maxDeliveries := uint32((time.Hour * 24) / time.Second)
+		// We wanted to retry message for 1 minute before it appended at the back of the DLQ topic.
+		maxDeliveries := uint32(60) // 1 min
 		consumerOptions.RetryEnable = true
 		consumerOptions.NackRedeliveryDelay = 1 * time.Second
 		consumerOptions.DLQ = &pulsar.DLQPolicy{
