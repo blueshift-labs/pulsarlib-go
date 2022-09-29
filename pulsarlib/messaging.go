@@ -535,18 +535,17 @@ func CreateRegexConsumer(tenantID, namespace, topicsPattern string, handler Hand
 	This API will create a Producer for a particular topic.
 	The Producer instance can be used to Publish messages to the topic.
 */
-func CreateProducer(tenantID string, namespace string, topic string) (Producer, error) {
+func CreateProducer(tenantID string, namespace string, topic string, producerOpts pulsar.ProducerOptions) (Producer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
 	}
 
 	topicPath := fmt.Sprintf("persistent://%s/%s/%s", tenantID, namespace, topic)
-	p, err := msging.client.CreateProducer(pulsar.ProducerOptions{
-		Topic: topicPath,
-		// We wanted to send error in case queue is full, this will give the sender a chance to requeue or retry msg
-		DisableBlockIfQueueFull: true,
-	})
+	producerOpts.Topic = topicPath
+	// We wanted to send error in case queue is full, this will give the sender a chance to requeue or retry msg
+	producerOpts.DisableBlockIfQueueFull = true
+	p, err := msging.client.CreateProducer(producerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("Error in creating producer. Error %v", err)
 	}
