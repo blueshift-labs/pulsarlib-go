@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/klauspost/compress/fse"
 )
@@ -20,7 +21,7 @@ type dEntrySingle struct {
 
 // double-symbols decoding
 type dEntryDouble struct {
-	seq   uint16
+	seq   [4]byte
 	nBits uint8
 	len   uint8
 }
@@ -32,7 +33,7 @@ const use8BitTables = true
 // The size of the input may be larger than the table definition.
 // Any content remaining after the table definition will be returned.
 // If no Scratch is provided a new one is allocated.
-// The returned Scratch can be used for decoding input using this table.
+// The returned Scratch can be used for encoding or decoding input using this table.
 func ReadTable(in []byte, s *Scratch) (s2 *Scratch, remain []byte, err error) {
 	s, err = s.prepare(in)
 	if err != nil {
@@ -58,8 +59,8 @@ func ReadTable(in []byte, s *Scratch) (s2 *Scratch, remain []byte, err error) {
 		s.symbolLen = uint16(oSize)
 		in = in[iSize:]
 	} else {
-		if len(in) <= int(iSize) {
-			return s, nil, errors.New("input too small for table")
+		if len(in) < int(iSize) {
+			return s, nil, fmt.Errorf("input too small for table, want %d bytes, have %d", iSize, len(in))
 		}
 		// FSE compressed weights
 		s.fse.DecompressLimit = 255
@@ -138,15 +139,33 @@ func ReadTable(in []byte, s *Scratch) (s2 *Scratch, remain []byte, err error) {
 	if len(s.dt.single) != tSize {
 		s.dt.single = make([]dEntrySingle, tSize)
 	}
+	cTable := s.prevTable
+	if cap(cTable) < maxSymbolValue+1 {
+		cTable = make([]cTableEntry, 0, maxSymbolValue+1)
+	}
+	cTable = cTable[:maxSymbolValue+1]
+	s.prevTable = cTable[:s.symbolLen]
+	s.prevTableLog = s.actualTableLog
+
 	for n, w := range s.huffWeight[:s.symbolLen] {
 		if w == 0 {
+			cTable[n] = cTableEntry{
+				val:   0,
+				nBits: 0,
+			}
 			continue
 		}
 		length := (uint32(1) << w) >> 1
 		d := dEntrySingle{
 			entry: uint16(s.actualTableLog+1-w) | (uint16(n) << 8),
 		}
+
 		rank := &rankStats[w]
+		cTable[n] = cTableEntry{
+			val:   uint16(*rank >> (w - 1)),
+			nBits: uint8(d.entry),
+		}
+
 		single := s.dt.single[*rank : *rank+length]
 		for i := range single {
 			single[i] = d
@@ -198,6 +217,7 @@ func (s *Scratch) Decoder() *Decoder {
 	return &Decoder{
 		dt:             s.dt,
 		actualTableLog: s.actualTableLog,
+		bufs:           &s.decPool,
 	}
 }
 
@@ -205,6 +225,15 @@ func (s *Scratch) Decoder() *Decoder {
 type Decoder struct {
 	dt             dTable
 	actualTableLog uint8
+	bufs           *sync.Pool
+}
+
+func (d *Decoder) buffer() *[4][256]byte {
+	buf, ok := d.bufs.Get().(*[4][256]byte)
+	if ok {
+		return buf
+	}
+	return &[4][256]byte{}
 }
 
 // Decompress1X will decompress a 1X encoded stream.
@@ -231,7 +260,8 @@ func (d *Decoder) Decompress1X(dst, src []byte) ([]byte, error) {
 	dt := d.dt.single[:tlSize]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	bufs := d.buffer()
+	buf := &bufs[0]
 	var off uint8
 
 	for br.off >= 8 {
@@ -259,6 +289,7 @@ func (d *Decoder) Decompress1X(dst, src []byte) ([]byte, error) {
 		if off == 0 {
 			if len(dst)+256 > maxDecodedSize {
 				br.close()
+				d.bufs.Put(bufs)
 				return nil, ErrMaxDecodedSizeExceeded
 			}
 			dst = append(dst, buf[:]...)
@@ -266,6 +297,7 @@ func (d *Decoder) Decompress1X(dst, src []byte) ([]byte, error) {
 	}
 
 	if len(dst)+int(off) > maxDecodedSize {
+		d.bufs.Put(bufs)
 		br.close()
 		return nil, ErrMaxDecodedSizeExceeded
 	}
@@ -292,6 +324,7 @@ func (d *Decoder) Decompress1X(dst, src []byte) ([]byte, error) {
 			}
 		}
 		if len(dst) >= maxDecodedSize {
+			d.bufs.Put(bufs)
 			br.close()
 			return nil, ErrMaxDecodedSizeExceeded
 		}
@@ -301,6 +334,7 @@ func (d *Decoder) Decompress1X(dst, src []byte) ([]byte, error) {
 		bitsLeft -= nBits
 		dst = append(dst, uint8(v.entry>>8))
 	}
+	d.bufs.Put(bufs)
 	return dst, br.close()
 }
 
@@ -323,41 +357,258 @@ func (d *Decoder) decompress1X8Bit(dst, src []byte) ([]byte, error) {
 	dt := d.dt.single[:256]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	bufs := d.buffer()
+	buf := &bufs[0]
 	var off uint8
 
-	shift := (8 - d.actualTableLog) & 7
+	switch d.actualTableLog {
+	case 8:
+		const shift = 8 - 8
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
 
-	//fmt.Printf("mask: %b, tl:%d\n", mask, d.actualTableLog)
-	for br.off >= 4 {
-		br.fillFast()
-		v := dt[br.peekByteFast()>>shift]
-		br.advance(uint8(v.entry))
-		buf[off+0] = uint8(v.entry >> 8)
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
-		br.advance(uint8(v.entry))
-		buf[off+1] = uint8(v.entry >> 8)
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
-		br.advance(uint8(v.entry))
-		buf[off+2] = uint8(v.entry >> 8)
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
-		br.advance(uint8(v.entry))
-		buf[off+3] = uint8(v.entry >> 8)
-
-		off += 4
-		if off == 0 {
-			if len(dst)+256 > maxDecodedSize {
-				br.close()
-				return nil, ErrMaxDecodedSizeExceeded
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					br.close()
+					d.bufs.Put(bufs)
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
 			}
-			dst = append(dst, buf[:]...)
 		}
+	case 7:
+		const shift = 8 - 7
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					br.close()
+					d.bufs.Put(bufs)
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 6:
+		const shift = 8 - 6
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 5:
+		const shift = 8 - 5
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 4:
+		const shift = 8 - 4
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 3:
+		const shift = 8 - 3
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 2:
+		const shift = 8 - 2
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	case 1:
+		const shift = 8 - 1
+		for br.off >= 4 {
+			br.fillFast()
+			v := dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+0] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+1] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+2] = uint8(v.entry >> 8)
+
+			v = dt[uint8(br.value>>(56+shift))]
+			br.advance(uint8(v.entry))
+			buf[off+3] = uint8(v.entry >> 8)
+
+			off += 4
+			if off == 0 {
+				if len(dst)+256 > maxDecodedSize {
+					d.bufs.Put(bufs)
+					br.close()
+					return nil, ErrMaxDecodedSizeExceeded
+				}
+				dst = append(dst, buf[:]...)
+			}
+		}
+	default:
+		d.bufs.Put(bufs)
+		return nil, fmt.Errorf("invalid tablelog: %d", d.actualTableLog)
 	}
 
 	if len(dst)+int(off) > maxDecodedSize {
+		d.bufs.Put(bufs)
 		br.close()
 		return nil, ErrMaxDecodedSizeExceeded
 	}
@@ -365,6 +616,8 @@ func (d *Decoder) decompress1X8Bit(dst, src []byte) ([]byte, error) {
 
 	// br < 4, so uint8 is fine
 	bitsLeft := int8(uint8(br.off)*8 + (64 - br.bitsRead))
+	shift := (8 - d.actualTableLog) & 7
+
 	for bitsLeft > 0 {
 		if br.bitsRead >= 64-8 {
 			for br.off > 0 {
@@ -375,6 +628,7 @@ func (d *Decoder) decompress1X8Bit(dst, src []byte) ([]byte, error) {
 		}
 		if len(dst) >= maxDecodedSize {
 			br.close()
+			d.bufs.Put(bufs)
 			return nil, ErrMaxDecodedSizeExceeded
 		}
 		v := dt[br.peekByteFast()>>shift]
@@ -383,6 +637,7 @@ func (d *Decoder) decompress1X8Bit(dst, src []byte) ([]byte, error) {
 		bitsLeft -= int8(nBits)
 		dst = append(dst, uint8(v.entry>>8))
 	}
+	d.bufs.Put(bufs)
 	return dst, br.close()
 }
 
@@ -402,33 +657,35 @@ func (d *Decoder) decompress1X8BitExactly(dst, src []byte) ([]byte, error) {
 	dt := d.dt.single[:256]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	bufs := d.buffer()
+	buf := &bufs[0]
 	var off uint8
 
-	const shift = 0
+	const shift = 56
 
 	//fmt.Printf("mask: %b, tl:%d\n", mask, d.actualTableLog)
 	for br.off >= 4 {
 		br.fillFast()
-		v := dt[br.peekByteFast()>>shift]
+		v := dt[uint8(br.value>>shift)]
 		br.advance(uint8(v.entry))
 		buf[off+0] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
+		v = dt[uint8(br.value>>shift)]
 		br.advance(uint8(v.entry))
 		buf[off+1] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
+		v = dt[uint8(br.value>>shift)]
 		br.advance(uint8(v.entry))
 		buf[off+2] = uint8(v.entry >> 8)
 
-		v = dt[br.peekByteFast()>>shift]
+		v = dt[uint8(br.value>>shift)]
 		br.advance(uint8(v.entry))
 		buf[off+3] = uint8(v.entry >> 8)
 
 		off += 4
 		if off == 0 {
 			if len(dst)+256 > maxDecodedSize {
+				d.bufs.Put(bufs)
 				br.close()
 				return nil, ErrMaxDecodedSizeExceeded
 			}
@@ -437,6 +694,7 @@ func (d *Decoder) decompress1X8BitExactly(dst, src []byte) ([]byte, error) {
 	}
 
 	if len(dst)+int(off) > maxDecodedSize {
+		d.bufs.Put(bufs)
 		br.close()
 		return nil, ErrMaxDecodedSizeExceeded
 	}
@@ -453,15 +711,17 @@ func (d *Decoder) decompress1X8BitExactly(dst, src []byte) ([]byte, error) {
 			}
 		}
 		if len(dst) >= maxDecodedSize {
+			d.bufs.Put(bufs)
 			br.close()
 			return nil, ErrMaxDecodedSizeExceeded
 		}
-		v := dt[br.peekByteFast()>>shift]
+		v := dt[br.peekByteFast()]
 		nBits := uint8(v.entry)
 		br.advance(nBits)
 		bitsLeft -= int8(nBits)
 		dst = append(dst, uint8(v.entry>>8))
 	}
+	d.bufs.Put(bufs)
 	return dst, br.close()
 }
 
@@ -509,12 +769,12 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 	single := d.dt.single[:tlSize]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	buf := d.buffer()
 	var off uint8
 	var decoded int
 
 	// Decode 2 values from each decoder/loop.
-	const bufoff = 256 / 4
+	const bufoff = 256
 	for {
 		if br[0].off < 4 || br[1].off < 4 || br[2].off < 4 || br[3].off < 4 {
 			break
@@ -527,24 +787,22 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 			br[stream2].fillFast()
 
 			val := br[stream].peekBitsFast(d.actualTableLog)
-			v := single[val&tlMask]
-			br[stream].advance(uint8(v.entry))
-			buf[off+bufoff*stream] = uint8(v.entry >> 8)
-
 			val2 := br[stream2].peekBitsFast(d.actualTableLog)
+			v := single[val&tlMask]
 			v2 := single[val2&tlMask]
+			br[stream].advance(uint8(v.entry))
 			br[stream2].advance(uint8(v2.entry))
-			buf[off+bufoff*stream2] = uint8(v2.entry >> 8)
+			buf[stream][off] = uint8(v.entry >> 8)
+			buf[stream2][off] = uint8(v2.entry >> 8)
 
 			val = br[stream].peekBitsFast(d.actualTableLog)
-			v = single[val&tlMask]
-			br[stream].advance(uint8(v.entry))
-			buf[off+bufoff*stream+1] = uint8(v.entry >> 8)
-
 			val2 = br[stream2].peekBitsFast(d.actualTableLog)
+			v = single[val&tlMask]
 			v2 = single[val2&tlMask]
+			br[stream].advance(uint8(v.entry))
 			br[stream2].advance(uint8(v2.entry))
-			buf[off+bufoff*stream2+1] = uint8(v2.entry >> 8)
+			buf[stream][off+1] = uint8(v.entry >> 8)
+			buf[stream2][off+1] = uint8(v2.entry >> 8)
 		}
 
 		{
@@ -554,41 +812,40 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 			br[stream2].fillFast()
 
 			val := br[stream].peekBitsFast(d.actualTableLog)
-			v := single[val&tlMask]
-			br[stream].advance(uint8(v.entry))
-			buf[off+bufoff*stream] = uint8(v.entry >> 8)
-
 			val2 := br[stream2].peekBitsFast(d.actualTableLog)
+			v := single[val&tlMask]
 			v2 := single[val2&tlMask]
+			br[stream].advance(uint8(v.entry))
 			br[stream2].advance(uint8(v2.entry))
-			buf[off+bufoff*stream2] = uint8(v2.entry >> 8)
+			buf[stream][off] = uint8(v.entry >> 8)
+			buf[stream2][off] = uint8(v2.entry >> 8)
 
 			val = br[stream].peekBitsFast(d.actualTableLog)
-			v = single[val&tlMask]
-			br[stream].advance(uint8(v.entry))
-			buf[off+bufoff*stream+1] = uint8(v.entry >> 8)
-
 			val2 = br[stream2].peekBitsFast(d.actualTableLog)
+			v = single[val&tlMask]
 			v2 = single[val2&tlMask]
+			br[stream].advance(uint8(v.entry))
 			br[stream2].advance(uint8(v2.entry))
-			buf[off+bufoff*stream2+1] = uint8(v2.entry >> 8)
+			buf[stream][off+1] = uint8(v.entry >> 8)
+			buf[stream2][off+1] = uint8(v2.entry >> 8)
 		}
 
 		off += 2
 
-		if off == bufoff {
+		if off == 0 {
 			if bufoff > dstEvery {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 1")
 			}
-			copy(out, buf[:bufoff])
-			copy(out[dstEvery:], buf[bufoff:bufoff*2])
-			copy(out[dstEvery*2:], buf[bufoff*2:bufoff*3])
-			copy(out[dstEvery*3:], buf[bufoff*3:bufoff*4])
-			off = 0
+			copy(out, buf[0][:])
+			copy(out[dstEvery:], buf[1][:])
+			copy(out[dstEvery*2:], buf[2][:])
+			copy(out[dstEvery*3:], buf[3][:])
 			out = out[bufoff:]
-			decoded += 256
+			decoded += bufoff * 4
 			// There must at least be 3 buffers left.
 			if len(out) < dstEvery*3 {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 2")
 			}
 		}
@@ -596,12 +853,13 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 	if off > 0 {
 		ioff := int(off)
 		if len(out) < dstEvery*3+ioff {
+			d.bufs.Put(buf)
 			return nil, errors.New("corruption detected: stream overrun 3")
 		}
-		copy(out, buf[:off])
-		copy(out[dstEvery:dstEvery+ioff], buf[bufoff:bufoff*2])
-		copy(out[dstEvery*2:dstEvery*2+ioff], buf[bufoff*2:bufoff*3])
-		copy(out[dstEvery*3:dstEvery*3+ioff], buf[bufoff*3:bufoff*4])
+		copy(out, buf[0][:off])
+		copy(out[dstEvery:], buf[1][:off])
+		copy(out[dstEvery*2:], buf[2][:off])
+		copy(out[dstEvery*3:], buf[3][:off])
 		decoded += int(off) * 4
 		out = out[off:]
 	}
@@ -631,6 +889,7 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 			}
 			// end inline...
 			if offset >= len(out) {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 4")
 			}
 
@@ -649,6 +908,7 @@ func (d *Decoder) Decompress4X(dst, src []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	d.bufs.Put(buf)
 	if dstSize != decoded {
 		return nil, errors.New("corruption detected: short output block")
 	}
@@ -688,19 +948,18 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 	out := dst
 	dstEvery := (dstSize + 3) / 4
 
-	shift := (8 - d.actualTableLog) & 7
+	shift := (56 + (8 - d.actualTableLog)) & 63
 
 	const tlSize = 1 << 8
-	const tlMask = tlSize - 1
 	single := d.dt.single[:tlSize]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	buf := d.buffer()
 	var off uint8
 	var decoded int
 
 	// Decode 4 values from each decoder/loop.
-	const bufoff = 256 / 4
+	const bufoff = 256
 	for {
 		if br[0].off < 4 || br[1].off < 4 || br[2].off < 4 || br[3].off < 4 {
 			break
@@ -710,96 +969,109 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 			// Interleave 2 decodes.
 			const stream = 0
 			const stream2 = 1
-			br[stream].fillFast()
-			br[stream2].fillFast()
+			br1 := &br[stream]
+			br2 := &br[stream2]
+			br1.fillFast()
+			br2.fillFast()
 
-			v := single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v := single[uint8(br1.value>>shift)].entry
+			v2 := single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off] = uint8(v >> 8)
+			buf[stream2][off] = uint8(v2 >> 8)
 
-			v2 := single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+1] = uint8(v >> 8)
+			buf[stream2][off+1] = uint8(v2 >> 8)
 
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+1] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+2] = uint8(v >> 8)
+			buf[stream2][off+2] = uint8(v2 >> 8)
 
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+1] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+2] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+3] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+3] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+3] = uint8(v >> 8)
+			buf[stream2][off+3] = uint8(v2 >> 8)
 		}
 
 		{
 			const stream = 2
 			const stream2 = 3
-			br[stream].fillFast()
-			br[stream2].fillFast()
+			br1 := &br[stream]
+			br2 := &br[stream2]
+			br1.fillFast()
+			br2.fillFast()
 
-			v := single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v := single[uint8(br1.value>>shift)].entry
+			v2 := single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off] = uint8(v >> 8)
+			buf[stream2][off] = uint8(v2 >> 8)
 
-			v2 := single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+1] = uint8(v >> 8)
+			buf[stream2][off+1] = uint8(v2 >> 8)
 
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+1] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+2] = uint8(v >> 8)
+			buf[stream2][off+2] = uint8(v2 >> 8)
 
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+1] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+2] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+3] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+3] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+3] = uint8(v >> 8)
+			buf[stream2][off+3] = uint8(v2 >> 8)
 		}
 
 		off += 4
 
-		if off == bufoff {
+		if off == 0 {
 			if bufoff > dstEvery {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 1")
 			}
-			copy(out, buf[:bufoff])
-			copy(out[dstEvery:], buf[bufoff:bufoff*2])
-			copy(out[dstEvery*2:], buf[bufoff*2:bufoff*3])
-			copy(out[dstEvery*3:], buf[bufoff*3:bufoff*4])
-			off = 0
+			copy(out, buf[0][:])
+			copy(out[dstEvery:], buf[1][:])
+			copy(out[dstEvery*2:], buf[2][:])
+			copy(out[dstEvery*3:], buf[3][:])
 			out = out[bufoff:]
-			decoded += 256
+			decoded += bufoff * 4
 			// There must at least be 3 buffers left.
 			if len(out) < dstEvery*3 {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 2")
 			}
 		}
@@ -807,12 +1079,13 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 	if off > 0 {
 		ioff := int(off)
 		if len(out) < dstEvery*3+ioff {
+			d.bufs.Put(buf)
 			return nil, errors.New("corruption detected: stream overrun 3")
 		}
-		copy(out, buf[:off])
-		copy(out[dstEvery:dstEvery+ioff], buf[bufoff:bufoff*2])
-		copy(out[dstEvery*2:dstEvery*2+ioff], buf[bufoff*2:bufoff*3])
-		copy(out[dstEvery*3:dstEvery*3+ioff], buf[bufoff*3:bufoff*4])
+		copy(out, buf[0][:off])
+		copy(out[dstEvery:], buf[1][:off])
+		copy(out[dstEvery*2:], buf[2][:off])
+		copy(out[dstEvery*3:], buf[3][:off])
 		decoded += int(off) * 4
 		out = out[off:]
 	}
@@ -824,6 +1097,7 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 		bitsLeft := int(br.off*8) + int(64-br.bitsRead)
 		for bitsLeft > 0 {
 			if br.finished() {
+				d.bufs.Put(buf)
 				return nil, io.ErrUnexpectedEOF
 			}
 			if br.bitsRead >= 56 {
@@ -844,11 +1118,12 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 			}
 			// end inline...
 			if offset >= len(out) {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 4")
 			}
 
 			// Read value and increment offset.
-			v := single[br.peekByteFast()>>shift].entry
+			v := single[uint8(br.value>>shift)].entry
 			nBits := uint8(v)
 			br.advance(nBits)
 			bitsLeft -= int(nBits)
@@ -858,9 +1133,11 @@ func (d *Decoder) decompress4X8bit(dst, src []byte) ([]byte, error) {
 		decoded += offset - dstEvery*i
 		err = br.close()
 		if err != nil {
+			d.bufs.Put(buf)
 			return nil, err
 		}
 	}
+	d.bufs.Put(buf)
 	if dstSize != decoded {
 		return nil, errors.New("corruption detected: short output block")
 	}
@@ -896,18 +1173,18 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 	out := dst
 	dstEvery := (dstSize + 3) / 4
 
-	const shift = 0
+	const shift = 56
 	const tlSize = 1 << 8
 	const tlMask = tlSize - 1
 	single := d.dt.single[:tlSize]
 
 	// Use temp table to avoid bound checks/append penalty.
-	var buf [256]byte
+	buf := d.buffer()
 	var off uint8
 	var decoded int
 
 	// Decode 4 values from each decoder/loop.
-	const bufoff = 256 / 4
+	const bufoff = 256
 	for {
 		if br[0].off < 4 || br[1].off < 4 || br[2].off < 4 || br[3].off < 4 {
 			break
@@ -917,96 +1194,109 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 			// Interleave 2 decodes.
 			const stream = 0
 			const stream2 = 1
-			br[stream].fillFast()
-			br[stream2].fillFast()
+			br1 := &br[stream]
+			br2 := &br[stream2]
+			br1.fillFast()
+			br2.fillFast()
 
-			v := single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v := single[uint8(br1.value>>shift)].entry
+			v2 := single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off] = uint8(v >> 8)
+			buf[stream2][off] = uint8(v2 >> 8)
 
-			v2 := single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+1] = uint8(v >> 8)
+			buf[stream2][off+1] = uint8(v2 >> 8)
 
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+1] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+2] = uint8(v >> 8)
+			buf[stream2][off+2] = uint8(v2 >> 8)
 
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+1] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+2] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+3] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+3] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+3] = uint8(v >> 8)
+			buf[stream2][off+3] = uint8(v2 >> 8)
 		}
 
 		{
 			const stream = 2
 			const stream2 = 3
-			br[stream].fillFast()
-			br[stream2].fillFast()
+			br1 := &br[stream]
+			br2 := &br[stream2]
+			br1.fillFast()
+			br2.fillFast()
 
-			v := single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v := single[uint8(br1.value>>shift)].entry
+			v2 := single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off] = uint8(v >> 8)
+			buf[stream2][off] = uint8(v2 >> 8)
 
-			v2 := single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+1] = uint8(v >> 8)
+			buf[stream2][off+1] = uint8(v2 >> 8)
 
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+1] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+2] = uint8(v >> 8)
+			buf[stream2][off+2] = uint8(v2 >> 8)
 
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+1] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+2] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+2] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
-
-			v = single[br[stream].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream+3] = uint8(v >> 8)
-			br[stream].advance(uint8(v))
-
-			v2 = single[br[stream2].peekByteFast()>>shift].entry
-			buf[off+bufoff*stream2+3] = uint8(v2 >> 8)
-			br[stream2].advance(uint8(v2))
+			v = single[uint8(br1.value>>shift)].entry
+			v2 = single[uint8(br2.value>>shift)].entry
+			br1.bitsRead += uint8(v)
+			br1.value <<= v & 63
+			br2.bitsRead += uint8(v2)
+			br2.value <<= v2 & 63
+			buf[stream][off+3] = uint8(v >> 8)
+			buf[stream2][off+3] = uint8(v2 >> 8)
 		}
 
 		off += 4
 
-		if off == bufoff {
+		if off == 0 {
 			if bufoff > dstEvery {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 1")
 			}
-			copy(out, buf[:bufoff])
-			copy(out[dstEvery:], buf[bufoff:bufoff*2])
-			copy(out[dstEvery*2:], buf[bufoff*2:bufoff*3])
-			copy(out[dstEvery*3:], buf[bufoff*3:bufoff*4])
-			off = 0
+			copy(out, buf[0][:])
+			copy(out[dstEvery:], buf[1][:])
+			copy(out[dstEvery*2:], buf[2][:])
+			copy(out[dstEvery*3:], buf[3][:])
 			out = out[bufoff:]
-			decoded += 256
+			decoded += bufoff * 4
 			// There must at least be 3 buffers left.
 			if len(out) < dstEvery*3 {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 2")
 			}
 		}
@@ -1016,10 +1306,10 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 		if len(out) < dstEvery*3+ioff {
 			return nil, errors.New("corruption detected: stream overrun 3")
 		}
-		copy(out, buf[:off])
-		copy(out[dstEvery:dstEvery+ioff], buf[bufoff:bufoff*2])
-		copy(out[dstEvery*2:dstEvery*2+ioff], buf[bufoff*2:bufoff*3])
-		copy(out[dstEvery*3:dstEvery*3+ioff], buf[bufoff*3:bufoff*4])
+		copy(out, buf[0][:off])
+		copy(out[dstEvery:], buf[1][:off])
+		copy(out[dstEvery*2:], buf[2][:off])
+		copy(out[dstEvery*3:], buf[3][:off])
 		decoded += int(off) * 4
 		out = out[off:]
 	}
@@ -1031,6 +1321,7 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 		bitsLeft := int(br.off*8) + int(64-br.bitsRead)
 		for bitsLeft > 0 {
 			if br.finished() {
+				d.bufs.Put(buf)
 				return nil, io.ErrUnexpectedEOF
 			}
 			if br.bitsRead >= 56 {
@@ -1051,11 +1342,12 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 			}
 			// end inline...
 			if offset >= len(out) {
+				d.bufs.Put(buf)
 				return nil, errors.New("corruption detected: stream overrun 4")
 			}
 
 			// Read value and increment offset.
-			v := single[br.peekByteFast()>>shift].entry
+			v := single[br.peekByteFast()].entry
 			nBits := uint8(v)
 			br.advance(nBits)
 			bitsLeft -= int(nBits)
@@ -1065,9 +1357,11 @@ func (d *Decoder) decompress4X8bitExactly(dst, src []byte) ([]byte, error) {
 		decoded += offset - dstEvery*i
 		err = br.close()
 		if err != nil {
+			d.bufs.Put(buf)
 			return nil, err
 		}
 	}
+	d.bufs.Put(buf)
 	if dstSize != decoded {
 		return nil, errors.New("corruption detected: short output block")
 	}
