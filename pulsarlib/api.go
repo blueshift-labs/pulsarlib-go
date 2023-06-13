@@ -713,7 +713,7 @@ func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
 	return nil
 }
 
-func GetSubscriptionStatsForPartitionedTopic(tenantID, namespace, topic, subscription string) (map[string]interface{}, error) {
+func GetSubscriptionStatsForPartitionedTopic(tenantID string, namespace string, topic string, subscription string) (map[string]interface{}, error) {
 	result := make(map[string]interface{}, 0)
 
 	getUrl := (&url.URL{
@@ -724,29 +724,26 @@ func GetSubscriptionStatsForPartitionedTopic(tenantID, namespace, topic, subscri
 
 	resp, err := http.Get(getUrl)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
 	respBuf, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
 	err = json.Unmarshal(respBuf, &result)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 
-	if result["subscriptions"] == nil {
-		return result, fmt.Errorf("failed to find subscriptions field in pulsar response")
-	}
-
-	subs := result["subscriptions"].(map[string]interface{})
-	for subName, stat := range subs {
-		if subName == subscription {
-			return stat.(map[string]interface{}), nil
+	if subscriptions, ok := result["subscriptions"].(map[string]interface{}); ok {
+		subValue, found := subscriptions[subscription]
+		if !found {
+			return nil, fmt.Errorf("failed to find subscriptions field in the pulsar response")
 		}
+		return subValue.(map[string]interface{}), nil
+	} else {
+		return nil, fmt.Errorf("failed to find exact subscription in the pulsar response")
 	}
-
-	return result, fmt.Errorf("failed to find the exact subscription in the pulsar response")
 }
