@@ -713,7 +713,7 @@ func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
 	return nil
 }
 
-func GetSubscriptionStatsForPartitionedTopic(tenantID string, namespace string, topic string, subscription string) (map[string]interface{}, error) {
+func GetStatsForPartitionedTopic(tenantID string, namespace string, topic string, subscription string) (map[string]interface{}, error) {
 	result := make(map[string]interface{}, 0)
 
 	getUrl := (&url.URL{
@@ -737,13 +737,5 @@ func GetSubscriptionStatsForPartitionedTopic(tenantID string, namespace string, 
 		return nil, err
 	}
 
-	if subscriptions, ok := result["subscriptions"].(map[string]interface{}); ok {
-		subValue, found := subscriptions[subscription]
-		if !found {
-			return nil, fmt.Errorf("failed to find subscriptions field in the pulsar response")
-		}
-		return subValue.(map[string]interface{}), nil
-	} else {
-		return nil, fmt.Errorf("failed to find exact subscription in the pulsar response")
-	}
+	return result, nil
 }
