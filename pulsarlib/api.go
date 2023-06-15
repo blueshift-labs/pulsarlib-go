@@ -713,7 +713,7 @@ func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
 	return nil
 }
 
-func GetStatsForPartitionedTopic(tenantID string, namespace string, topic string, subscription string) (map[string]interface{}, error) {
+func GetStatsForPartitionedTopic(tenantID string, namespace string, topic string) (map[string]interface{}, error) {
 	result := make(map[string]interface{}, 0)
 
 	getUrl := (&url.URL{
