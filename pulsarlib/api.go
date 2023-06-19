@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -63,7 +63,7 @@ func CreateTenant(tenantID string, adminRoles []string, allowedClusters []string
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in creating tenant, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -101,7 +101,7 @@ func DeleteTenant(tenantID string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in deleting tenant, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -141,7 +141,7 @@ func CreateNamespace(tenantID string, namespace string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in creating namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -183,7 +183,7 @@ func SetNamespaceRetention(tenantID string, namespace string, retentionInMB int6
 	}
 
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in updating namespace retention, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -222,7 +222,7 @@ func DeleteNamespace(tenantID string, namespace string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in deleting namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -257,7 +257,7 @@ func UnloadNamespace(tenantID string, namespace string) error {
 	}
 
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in unloading namespace, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -280,7 +280,7 @@ func ListTenants() ([]string, error) {
 		return result, err
 	}
 
-	respBuf, err := ioutil.ReadAll(resp.Body)
+	respBuf, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return result, err
 	}
@@ -306,7 +306,7 @@ func ListNamespaces(tenantID string) ([]string, error) {
 		return result, err
 	}
 
-	respBuf, err := ioutil.ReadAll(resp.Body)
+	respBuf, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return result, err
 	}
@@ -347,7 +347,7 @@ func CreateTopic(tenantID string, namespace string, topic string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in creating topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -385,7 +385,7 @@ func DeleteTopic(tenantID string, namespace string, topic string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in deleting topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -408,7 +408,7 @@ func ListTopics(tenantID string, namespace string) ([]string, error) {
 		return result, err
 	}
 
-	respBuf, err := ioutil.ReadAll(resp.Body)
+	respBuf, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return result, err
 	}
@@ -453,7 +453,7 @@ func CreatePartitionedTopic(tenantID string, namespace string, topic string, par
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in creating topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -462,7 +462,7 @@ func CreatePartitionedTopic(tenantID string, namespace string, topic string, par
 	return nil
 }
 
-func DeletePartionedTopic(tenantID string, namespace string, topic string) error {
+func DeletePartitionedTopic(tenantID string, namespace string, topic string) error {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return fmt.Errorf("initMessaging not called yet")
@@ -491,7 +491,7 @@ func DeletePartionedTopic(tenantID string, namespace string, topic string) error
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in deleting topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -500,7 +500,7 @@ func DeletePartionedTopic(tenantID string, namespace string, topic string) error
 	return nil
 }
 
-func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
+func ListPartitionedTopics(tenantID string, namespace string) ([]string, error) {
 	result := make([]string, 0)
 
 	getUrl := (&url.URL{
@@ -514,7 +514,7 @@ func ListPartionedTopics(tenantID string, namespace string) ([]string, error) {
 		return result, err
 	}
 
-	respBuf, err := ioutil.ReadAll(resp.Body)
+	respBuf, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return result, err
 	}
@@ -561,7 +561,7 @@ func CreateSubscriptionOnTopic(tenantID, namespace, topic, subscription, positio
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in creating subscription, http Response [%v]; error while reading response body - [%s]", resp.StatusCode, err.Error())
 		}
@@ -594,7 +594,7 @@ func DeleteSubscriptionOnTopic(tenantID, namespace, topic, subscription string) 
 	}
 
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in deleting subscription, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
 		}
@@ -623,7 +623,7 @@ func GetSubscriptionsOnTopic(tenantID, namespace, topic string) (subscriptionsOn
 		return nil, err
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 
 	if err != nil {
 		return nil, fmt.Errorf("error while reading pulsar response of subscriptions on topic - %s", err.Error())
@@ -662,7 +662,7 @@ func ResetSubscriptionOnTopic(tenantID string, namespace string, topic string, s
 		return err
 	}
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("error while resetting subscription on topic - %s", err.Error())
 	}
@@ -703,7 +703,7 @@ func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
 		return nil
 	}
 	if resp.StatusCode >= 400 {
-		respBody, err := ioutil.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("error in overriding broker's allowAutoSubscriptionCreation setting for a namespace, http response [%v]; error while reading response body: %s", resp.StatusCode, err.Error())
 		}
@@ -711,4 +711,38 @@ func SetAutoSubscriptionCreationOnNamespace(tenantID, namespace string) error {
 
 	}
 	return nil
+}
+
+func GetStatsForPartitionedTopic(tenantID string, namespace string, topic string) (map[string]interface{}, error) {
+	result := make(map[string]interface{}, 0)
+
+	getUrl := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", msging.pulsarHost, msging.pulsarHttpPort),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/partitioned-stats", tenantID, namespace, topic),
+	}).String()
+
+	resp, err := http.Get(getUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	respBuf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 400 {
+		if err != nil {
+			return nil, fmt.Errorf("error while getting stats for partitioned topic; error occurred while attempting to read the response body; status code %d, err [%s]", err.Error(), resp.StatusCode)
+		}
+		return nil, fmt.Errorf("status code %d while getting stats for partitioned topic - %s", resp.StatusCode, string(respBuf))
+	}
+
+	err = json.Unmarshal(respBuf, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
