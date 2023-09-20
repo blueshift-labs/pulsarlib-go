@@ -64,7 +64,7 @@ type Producer interface {
 
 var msging *messaging
 
-//Internal structs
+// Internal structs
 type messageItem struct {
 	message pulsar.Message
 	wg      *sync.WaitGroup
@@ -285,9 +285,9 @@ func (c *consumer) Stats() Stats {
 }
 
 /*
-	This API will initialize the messaging channel.
-	It will do all the connection initialiations.
-	workerCount is the number of message processing workers.
+This API will initialize the messaging channel.
+It will do all the connection initialiations.
+workerCount is the number of message processing workers.
 */
 func InitMessaging(workerCount int, host string, dataPort int, httpPort int) error {
 	msging = &messaging{
@@ -339,7 +339,6 @@ const (
 
 type ConsumerOpts struct {
 	SubscriptionName string
-	RetryEnabled     bool
 	InitialPosition  InitialPosition
 }
 
@@ -355,19 +354,19 @@ func toInitialPosition(p InitialPosition) pulsar.SubscriptionInitialPosition {
 }
 
 /*
-	This API will create a Consumer for a particular topic.
-	The handler passed should implement the Handler interface from this module.
-	The consumer will create the subscription and be in a passive state until Start() is called.
-	The consumer can be Paused and Unpaused at any point.
-	The commitInterval used to commit messages after every n messages are consumed.
-	The Pause() function will flushout the already received messages and pause receiving any further messages.
-	The Unpause() function will resume receiving messages.
-	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
-	The Unsubscribe() function can be used if subscription needs to be deleted.
-	The Stats() function provides the stats for messages consumed.
+This API will create a Consumer for a particular topic.
+The handler passed should implement the Handler interface from this module.
+The consumer will create the subscription and be in a passive state until Start() is called.
+The consumer can be Paused and Unpaused at any point.
+The commitInterval used to commit messages after every n messages are consumed.
+The Pause() function will flushout the already received messages and pause receiving any further messages.
+The Unpause() function will resume receiving messages.
+The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
+The Unsubscribe() function can be used if subscription needs to be deleted.
+The Stats() function provides the stats for messages consumed.
 
-	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
-	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
+Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
+Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
 func CreateConsumer(tenantID, namespace string, topics []string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
@@ -412,20 +411,19 @@ func CreateConsumer(tenantID, namespace string, topics []string, handler Handler
 }
 
 /*
-	This API will create a Consumer for a particular topic.
-	The handler passed should implement the Handler interface from this module.
-	The consumer will create the subscription and be in a passive state until Start() is called.
-	The consumer can be Paused and Unpaused at any point.
-	The commitInterval used to commit messages after every n messages are consumed.
-	The Pause() function will flushout the already received messages and pause receiving any further messages.
-	The Unpause() function will resume receiving messages.
-	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
-	The Unsubscribe() function can be used if subscription needs to be deleted.
-	The Stats() function provides the stats for messages consumed.
+This API will create a Consumer for a particular topic.
+The handler passed should implement the Handler interface from this module.
+The consumer will create the subscription and be in a passive state until Start() is called.
+The consumer can be Paused and Unpaused at any point.
+The commitInterval used to commit messages after every n messages are consumed.
+The Pause() function will flushout the already received messages and pause receiving any further messages.
+The Unpause() function will resume receiving messages.
+The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
+The Unsubscribe() function can be used if subscription needs to be deleted.
+The Stats() function provides the stats for messages consumed.
 
-	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
-	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
-    retryEnabled will let the consumer retry message in case of HandleMessage return `RetryMessage` struct.
+Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
+Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
 func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
@@ -440,18 +438,6 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 		SubscriptionName:            opts.SubscriptionName,
 		Type:                        pulsar.Shared,
 		SubscriptionInitialPosition: toInitialPosition(opts.InitialPosition),
-	}
-
-	if opts.RetryEnabled {
-		// We wanted to retry message for 1 minute before it appended at the back of the DLQ topic.
-		maxDeliveries := uint32(60) // 1 min
-		consumerOptions.RetryEnable = true
-		consumerOptions.NackRedeliveryDelay = 1 * time.Second
-		consumerOptions.DLQ = &pulsar.DLQPolicy{
-			MaxDeliveries:    maxDeliveries,
-			DeadLetterTopic:  topicURI,
-			RetryLetterTopic: topicURI,
-		}
 	}
 
 	c, err := msging.client.Subscribe(consumerOptions)
@@ -481,18 +467,18 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 }
 
 /*
-	This API will create a Consumer for a topics matching the topics pattern.
-	The handler passed should implement the Handler interface from this module.
-	The consumer will create the subscription and be in a passive state until Start() is called.
-	The consumer can be Paused and Unpaused at any point.
-	The Pause() function will flushout the already received messages and pause receiving any further messages.
-	The Unpause() function will resume receiving messages.
-	The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
-	The Unsubscribe() function can be used if subscription needs to be deleted.
-	The Stats() function provides the stats for messages consumed.
+This API will create a Consumer for a topics matching the topics pattern.
+The handler passed should implement the Handler interface from this module.
+The consumer will create the subscription and be in a passive state until Start() is called.
+The consumer can be Paused and Unpaused at any point.
+The Pause() function will flushout the already received messages and pause receiving any further messages.
+The Unpause() function will resume receiving messages.
+The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
+The Unsubscribe() function can be used if subscription needs to be deleted.
+The Stats() function provides the stats for messages consumed.
 
-	Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
-	Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
+Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
+Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
 func CreateRegexConsumer(tenantID, namespace, topicsPattern string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
@@ -532,8 +518,8 @@ func CreateRegexConsumer(tenantID, namespace, topicsPattern string, handler Hand
 }
 
 /*
-	This API will create a Producer for a particular topic.
-	The Producer instance can be used to Publish messages to the topic.
+This API will create a Producer for a particular topic.
+The Producer instance can be used to Publish messages to the topic.
 */
 func CreateProducer(tenantID string, namespace string, topic string) (Producer, error) {
 	//Check if InitMessaging was done prior to this call
