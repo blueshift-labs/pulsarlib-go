@@ -20,6 +20,7 @@ package pulsar
 import (
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar/auth"
@@ -30,7 +31,6 @@ import (
 )
 
 const (
-	defaultConnectionTimeout           = 10 * time.Second
 	defaultOperationTimeout            = 30 * time.Second
 	defaultKeepAliveInterval           = 30 * time.Second
 	defaultMemoryLimitBytes            = 64 * 1024 * 1024
@@ -40,13 +40,16 @@ const (
 )
 
 type client struct {
-	cnxPool       internal.ConnectionPool
-	rpcClient     internal.RPCClient
-	handlers      internal.ClientHandlers
-	lookupService internal.LookupService
-	metrics       *internal.Metrics
-	tcClient      *transactionCoordinatorClient
-	memLimit      internal.MemoryLimitController
+	cnxPool          internal.ConnectionPool
+	rpcClient        internal.RPCClient
+	handlers         internal.ClientHandlers
+	lookupService    internal.LookupService
+	metrics          *internal.Metrics
+	tcClient         *transactionCoordinatorClient
+	memLimit         internal.MemoryLimitController
+	closeOnce        sync.Once
+	operationTimeout time.Duration
+	tlsEnabled       bool
 
 	log log.Logger
 }
@@ -91,6 +94,9 @@ func newClient(options ClientOptions) (Client, error) {
 			TrustCertsFilePath:      options.TLSTrustCertsFilePath,
 			ValidateHostname:        options.TLSValidateHostname,
 			ServerName:              url.Hostname(),
+			CipherSuites:            options.TLSCipherSuites,
+			MinVersion:              options.TLSMinVersion,
+			MaxVersion:              options.TLSMaxVersion,
 		}
 	default:
 		return nil, newError(InvalidConfiguration, fmt.Sprintf("Invalid URL scheme '%s'", url.Scheme))
@@ -112,10 +118,10 @@ func newClient(options ClientOptions) (Client, error) {
 		return nil, err
 	}
 
+	// the default timeout respects Go's default timeout which is no timeout
+	// Missing user specified timeout renders 0 values that matches
+	// net.Dailer's default if time.Duration value is not initialized
 	connectionTimeout := options.ConnectionTimeout
-	if connectionTimeout.Nanoseconds() == 0 {
-		connectionTimeout = defaultConnectionTimeout
-	}
 
 	operationTimeout := options.OperationTimeout
 	if operationTimeout.Nanoseconds() == 0 {
@@ -157,30 +163,17 @@ func newClient(options ClientOptions) (Client, error) {
 	c := &client{
 		cnxPool: internal.NewConnectionPool(tlsConfig, authProvider, connectionTimeout, keepAliveInterval,
 			maxConnectionsPerHost, logger, metrics, connectionMaxIdleTime),
-		log:      logger,
-		metrics:  metrics,
-		memLimit: internal.NewMemoryLimitController(memLimitBytes, defaultMemoryLimitTriggerThreshold),
+		log:              logger,
+		metrics:          metrics,
+		memLimit:         internal.NewMemoryLimitController(memLimitBytes, defaultMemoryLimitTriggerThreshold),
+		operationTimeout: operationTimeout,
+		tlsEnabled:       tlsConfig != nil,
 	}
-	serviceNameResolver := internal.NewPulsarServiceNameResolver(url)
 
-	c.rpcClient = internal.NewRPCClient(url, serviceNameResolver, c.cnxPool, operationTimeout, logger, metrics)
+	c.rpcClient = internal.NewRPCClient(url, c.cnxPool, operationTimeout, logger, metrics,
+		options.ListenerName, tlsConfig, authProvider)
 
-	switch url.Scheme {
-	case "pulsar", "pulsar+ssl":
-		c.lookupService = internal.NewLookupService(c.rpcClient, url, serviceNameResolver,
-			tlsConfig != nil, options.ListenerName, logger, metrics)
-	case "http", "https":
-		httpClient, err := internal.NewHTTPClient(url, serviceNameResolver, tlsConfig,
-			operationTimeout, logger, metrics, authProvider)
-		if err != nil {
-			return nil, newError(InvalidConfiguration, fmt.Sprintf("Failed to init http client with err: '%s'",
-				err.Error()))
-		}
-		c.lookupService = internal.NewHTTPLookupService(httpClient, url, serviceNameResolver,
-			tlsConfig != nil, logger, metrics)
-	default:
-		return nil, newError(InvalidConfiguration, fmt.Sprintf("Invalid URL scheme '%s'", url.Scheme))
-	}
+	c.lookupService = c.rpcClient.LookupService("")
 
 	c.handlers = internal.NewClientHandlers()
 
@@ -193,6 +186,14 @@ func newClient(options ClientOptions) (Client, error) {
 	}
 
 	return c, nil
+}
+
+func (c *client) NewTransaction(timeout time.Duration) (Transaction, error) {
+	id, err := c.tcClient.newTransaction(timeout)
+	if err != nil {
+		return nil, err
+	}
+	return newTransaction(*id, c.tcClient, timeout), nil
 }
 
 func (c *client) CreateProducer(options ProducerOptions) (Producer, error) {
@@ -255,7 +256,16 @@ func (c *client) TopicPartitions(topic string) ([]string, error) {
 }
 
 func (c *client) Close() {
-	c.handlers.Close()
-	c.cnxPool.Close()
-	c.lookupService.Close()
+	c.closeOnce.Do(func() {
+		c.handlers.Close()
+		c.cnxPool.Close()
+		c.lookupService.Close()
+	})
+}
+
+func (c *client) selectServiceURL(brokerServiceURL, brokerServiceURLTLS string) string {
+	if c.tlsEnabled {
+		return brokerServiceURLTLS
+	}
+	return brokerServiceURL
 }

@@ -40,7 +40,7 @@ import (
 )
 
 const (
-	PulsarProtocolVersion = int32(pb.ProtocolVersion_v18)
+	PulsarProtocolVersion = int32(pb.ProtocolVersion_v20)
 )
 
 type TLSOptions struct {
@@ -50,6 +50,9 @@ type TLSOptions struct {
 	AllowInsecureConnection bool
 	ValidateHostname        bool
 	ServerName              string
+	CipherSuites            []uint16
+	MinVersion              uint16
+	MaxVersion              uint16
 }
 
 var (
@@ -66,7 +69,10 @@ type ConnectionListener interface {
 	ReceivedSendReceipt(response *pb.CommandSendReceipt)
 
 	// ConnectionClosed close the TCP connection.
-	ConnectionClosed()
+	ConnectionClosed(closeProducer *pb.CommandCloseProducer)
+
+	// SetRedirectedClusterURI set the redirected cluster URI for lookups
+	SetRedirectedClusterURI(redirectedClusterURI string)
 }
 
 // Connection is a interface of client cnx.
@@ -81,6 +87,8 @@ type Connection interface {
 	ID() string
 	GetMaxMessageSize() int32
 	Close()
+	WaitForClose() <-chan interface{}
+	IsProxied() bool
 }
 
 type ConsumerHandler interface {
@@ -89,7 +97,10 @@ type ConsumerHandler interface {
 	ActiveConsumerChanged(isActive bool)
 
 	// ConnectionClosed close the TCP connection.
-	ConnectionClosed()
+	ConnectionClosed(closeConsumer *pb.CommandCloseConsumer)
+
+	// SetRedirectedClusterURI set the redirected cluster URI for lookups
+	SetRedirectedClusterURI(redirectedClusterURI string)
 }
 
 type connectionState int32
@@ -253,7 +264,11 @@ func (c *connection) connect() bool {
 
 	if c.tlsOptions == nil {
 		// Clear text connection
-		cnx, err = net.DialTimeout("tcp", c.physicalAddr.Host, c.connectionTimeout)
+		if c.connectionTimeout.Nanoseconds() > 0 {
+			cnx, err = net.DialTimeout("tcp", c.physicalAddr.Host, c.connectionTimeout)
+		} else {
+			cnx, err = net.Dial("tcp", c.physicalAddr.Host)
+		}
 	} else {
 		// TLS connection
 		tlsConfig, err = c.getTLSConfig()
@@ -262,6 +277,8 @@ func (c *connection) connect() bool {
 			return false
 		}
 
+		// time.Duration is initialized to 0 by default, net.Dialer's default timeout is no timeout
+		// therefore if c.connectionTimeout is 0, it means no timeout
 		d := &net.Dialer{Timeout: c.connectionTimeout}
 		cnx, err = tls.DialWithDialer(d, "tcp", c.physicalAddr.Host, tlsConfig)
 	}
@@ -303,7 +320,7 @@ func (c *connection) doHandshake() bool {
 		},
 	}
 
-	if c.logicalAddr.Host != c.physicalAddr.Host {
+	if c.IsProxied() {
 		cmdConnect.ProxyToBrokerUrl = proto.String(c.logicalAddr.Host)
 	}
 	c.writeCommand(baseCommand(pb.BaseCommand_CONNECT, cmdConnect))
@@ -329,8 +346,13 @@ func (c *connection) doHandshake() bool {
 		c.maxMessageSize = MaxMessageSize
 	}
 	c.log.Info("Connection is ready")
+	c.setLastDataReceived(time.Now())
 	c.changeState(connectionReady)
 	return true
+}
+
+func (c *connection) IsProxied() bool {
+	return c.logicalAddr.Host != c.physicalAddr.Host
 }
 
 func (c *connection) waitUntilReady() error {
@@ -568,6 +590,9 @@ func (c *connection) internalReceivedCommand(cmd *pb.BaseCommand, headersAndPayl
 
 	case pb.BaseCommand_CLOSE_CONSUMER:
 		c.handleCloseConsumer(cmd.GetCloseConsumer())
+
+	case pb.BaseCommand_TOPIC_MIGRATED:
+		c.handleTopicMigrated(cmd.GetTopicMigrated())
 
 	case pb.BaseCommand_AUTH_CHALLENGE:
 		c.handleAuthChallenge(cmd.GetAuthChallenge())
@@ -820,6 +845,11 @@ func (c *connection) handleAuthChallenge(authChallenge *pb.CommandAuthChallenge)
 		return
 	}
 
+	// Brokers expect authData to be not nil
+	if authData == nil {
+		authData = []byte{}
+	}
+
 	cmdAuthResponse := &pb.CommandAuthResponse{
 		ProtocolVersion: proto.Int32(PulsarProtocolVersion),
 		ClientVersion:   proto.String(ClientVersionString),
@@ -878,7 +908,7 @@ func (c *connection) handleCloseConsumer(closeConsumer *pb.CommandCloseConsumer)
 	c.log.Infof("Broker notification of Closed consumer: %d", consumerID)
 
 	if consumer, ok := c.consumerHandler(consumerID); ok {
-		consumer.ConnectionClosed()
+		consumer.ConnectionClosed(closeConsumer)
 		c.DeleteConsumeHandler(consumerID)
 	} else {
 		c.log.WithField("consumerID", consumerID).Warnf("Consumer with ID not found while closing consumer")
@@ -902,10 +932,55 @@ func (c *connection) handleCloseProducer(closeProducer *pb.CommandCloseProducer)
 	producer, ok := c.deletePendingProducers(producerID)
 	// did we find a producer?
 	if ok {
-		producer.ConnectionClosed()
+		producer.ConnectionClosed(closeProducer)
 	} else {
 		c.log.WithField("producerID", producerID).Warn("Producer with ID not found while closing producer")
 	}
+}
+
+func (c *connection) getMigratedBrokerServiceURL(commandTopicMigrated *pb.CommandTopicMigrated) string {
+	if c.tlsOptions == nil {
+		if commandTopicMigrated.GetBrokerServiceUrl() != "" {
+			return commandTopicMigrated.GetBrokerServiceUrl()
+		}
+	} else if commandTopicMigrated.GetBrokerServiceUrlTls() != "" {
+		return commandTopicMigrated.GetBrokerServiceUrlTls()
+	}
+	return ""
+}
+
+func (c *connection) handleTopicMigrated(commandTopicMigrated *pb.CommandTopicMigrated) {
+	resourceID := commandTopicMigrated.GetResourceId()
+	migratedBrokerServiceURL := c.getMigratedBrokerServiceURL(commandTopicMigrated)
+	if migratedBrokerServiceURL == "" {
+		c.log.Warnf("Failed to find the migrated broker url for resource: %s, migratedBrokerUrl: %s, migratedBrokerUrlTls:%s",
+			resourceID,
+			commandTopicMigrated.GetBrokerServiceUrl(),
+			commandTopicMigrated.GetBrokerServiceUrlTls())
+		return
+	}
+	if commandTopicMigrated.GetResourceType() == pb.CommandTopicMigrated_Producer {
+		c.listenersLock.RLock()
+		producer, ok := c.listeners[resourceID]
+		c.listenersLock.RUnlock()
+		if ok {
+			producer.SetRedirectedClusterURI(migratedBrokerServiceURL)
+			c.log.Infof("producerID:{%d} migrated to RedirectedClusterURI:{%s}",
+				resourceID, migratedBrokerServiceURL)
+		} else {
+			c.log.WithField("producerID", resourceID).Warn("Failed to SetRedirectedClusterURI")
+		}
+	} else {
+		consumer, ok := c.consumerHandler(resourceID)
+		if ok {
+			consumer.SetRedirectedClusterURI(migratedBrokerServiceURL)
+			c.log.Infof("consumerID:{%d} migrated to RedirectedClusterURI:{%s}",
+				resourceID, migratedBrokerServiceURL)
+		} else {
+			c.log.WithField("consumerID", resourceID).Warn("Failed to SetRedirectedClusterURI")
+		}
+	}
+
 }
 
 func (c *connection) RegisterListener(id uint64, listener ConnectionListener) error {
@@ -975,6 +1050,10 @@ func (c *connection) CheckIdle(maxIdleTime time.Duration) bool {
 	return time.Since(c.lastActive) > maxIdleTime
 }
 
+func (c *connection) WaitForClose() <-chan interface{} {
+	return c.closeCh
+}
+
 // Close closes the connection by
 // closing underlying socket connection and closeCh.
 // This also triggers callbacks to the ConnectionClosed listeners.
@@ -1009,12 +1088,12 @@ func (c *connection) Close() {
 
 		// notify producers connection closed
 		for _, listener := range listeners {
-			listener.ConnectionClosed()
+			listener.ConnectionClosed(nil)
 		}
 
 		// notify consumers connection closed
 		for _, handler := range consumerHandlers {
-			handler.ConnectionClosed()
+			handler.ConnectionClosed(nil)
 		}
 
 		c.metrics.ConnectionsClosed.Inc()
@@ -1046,6 +1125,9 @@ func (c *connection) closed() bool {
 func (c *connection) getTLSConfig() (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: c.tlsOptions.AllowInsecureConnection,
+		CipherSuites:       c.tlsOptions.CipherSuites,
+		MinVersion:         c.tlsOptions.MinVersion,
+		MaxVersion:         c.tlsOptions.MaxVersion,
 	}
 
 	if c.tlsOptions.TrustCertsFilePath != "" {
