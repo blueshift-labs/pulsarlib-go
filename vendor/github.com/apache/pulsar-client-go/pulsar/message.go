@@ -69,6 +69,10 @@ type ProducerMessage struct {
 	//Schema assign to the current message
 	//Note: messages may have a different schema from producer schema, use it instead of producer schema when assigned
 	Schema Schema
+
+	//Transaction assign to the current message
+	//Note: The message is not visible before the transaction is committed.
+	Transaction Transaction
 }
 
 // Message abstraction used in Pulsar
@@ -160,6 +164,12 @@ type MessageID interface {
 
 	// String returns message id in string format
 	String() string
+}
+
+// TopicMessageID defined the correspondence between topic and MessageID.
+type TopicMessageID interface {
+	MessageID
+	Topic() string
 }
 
 // DeserializeMessageID reconstruct a MessageID object from its serialized representation
