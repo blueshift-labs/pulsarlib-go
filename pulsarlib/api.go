@@ -266,6 +266,41 @@ func UnloadNamespace(tenantID string, namespace string) error {
 	return nil
 }
 
+func UnloadPersistentTopic(tenantID string, namespace string, topic string) error {
+	//Check if InitMessaging was done prior to this call
+	if msging == nil {
+		return fmt.Errorf("initMessaging not called yet")
+	}
+
+	unloadUrl := (&url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("%s:%d", msging.pulsarHost, msging.pulsarHttpPort),
+		Path:   fmt.Sprintf("admin/v2/persistent/%s/%s/%s/unload/unloadTopic", tenantID, namespace, topic),
+	}).String()
+
+	body := make([]byte, 0)
+	req, err := http.NewRequest(http.MethodPut, unloadUrl, bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	// set the request header Content-Type for json
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode >= 400 {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("error in unloading persistent topic, http Response [%v]; error while reading response body [%s]", resp.StatusCode, err.Error())
+		}
+		return fmt.Errorf("error in unloading persistent topic, http Response [%v]; and error [%s]", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 func ListTenants() ([]string, error) {
 	result := make([]string, 0)
 
