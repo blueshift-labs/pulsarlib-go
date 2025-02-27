@@ -383,6 +383,9 @@ const (
 type ConsumerOpts struct {
 	SubscriptionName string
 	InitialPosition  InitialPosition
+	// WorkerCount specifies the number of goroutines to process messages for this consumer.
+	// If 0, messages will be processed using the global workers from InitMessaging.
+	WorkerCount int
 }
 
 func toInitialPosition(p InitialPosition) pulsar.SubscriptionInitialPosition {
@@ -464,13 +467,11 @@ The Unpause() function will resume receiving messages.
 The Stop() function will flush existing messages and stop the consumer. It won't delete the subscription.
 The Unsubscribe() function can be used if subscription needs to be deleted.
 The Stats() function provides the stats for messages consumed.
-The workerCount parameter specifies the number of goroutines to process messages for this specific topic.
-If workerCount is 0, messages will be processed using the global workers from InitMessaging.
 
 Creating multiple instances of Consumer for same topic will deliver message to only one of the instances.
 Inorder to recreate a Consumer for same topic make sure Stop() is called on old Consumer instance.
 */
-func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handler, opts ConsumerOpts, workerCount int) (Consumer, error) {
+func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handler, opts ConsumerOpts) (Consumer, error) {
 	//Check if InitMessaging was done prior to this call
 	if msging == nil {
 		return nil, fmt.Errorf("InitMessaging not called yet")
@@ -510,10 +511,10 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 		workerWg:       &sync.WaitGroup{},
 	}
 
-	// Set up topic-specific workers if workerCount > 0
-	if workerCount > 0 {
-		consumer.workerCount = workerCount
-		consumer.messageCh = make(chan *messageItem, workerCount*2)
+	// Set up topic-specific workers if WorkerCount > 0
+	if opts.WorkerCount > 0 {
+		consumer.workerCount = opts.WorkerCount
+		consumer.messageCh = make(chan *messageItem, opts.WorkerCount*2)
 	} else {
 		// Use global message channel if no topic-specific workers
 		consumer.messageCh = msging.messageCh
