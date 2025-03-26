@@ -42,7 +42,7 @@ type Consumer interface {
 	//This function will start the consumption of messages.
 	Start() error
 	//This function will flush any existing messages and stop the consumer client.
-	Stop() error
+	Stop()
 	//This function will delete the subscription created by the consumer.
 	Unsubscribe() error
 	//This function will flush existing messages and pause further consumption.
@@ -104,6 +104,13 @@ type consumer struct {
 	//Waitgroup for tracking messages processed and stop of consumer.
 	messageWg      *sync.WaitGroup
 	consumerStopWg *sync.WaitGroup
+
+	// Channel for topic-specific message processing
+	messageCh chan *messageItem
+	// Number of workers for this consumer
+	workerCount int
+	// Worker waitgroup for cleanup
+	workerWg *sync.WaitGroup
 }
 
 type producer struct {
@@ -172,6 +179,28 @@ func (c *consumer) pauseWait() {
 	<-c.unpauseCh
 }
 
+func (c *consumer) processMessageWorker() {
+	for messageItem := range c.messageCh {
+		m := &Message{
+			Key:        messageItem.message.Key(),
+			Value:      messageItem.message.Payload(),
+			Properties: messageItem.message.Properties(),
+		}
+		retry := messageItem.handler.HandleMessage(m)
+		if retry != nil {
+			if retry.RetryAfter == 0 {
+				messageItem.pulsarc.Nack(messageItem.message)
+			} else {
+				messageItem.pulsarc.ReconsumeLater(messageItem.message, retry.RetryAfter)
+			}
+		} else {
+			messageItem.pulsarc.Ack(messageItem.message)
+		}
+		messageItem.wg.Done()
+	}
+	c.workerWg.Done()
+}
+
 func (c *consumer) messageFetcher() {
 	for {
 		ctx, canc := context.WithCancel(c.ctx)
@@ -192,7 +221,7 @@ func (c *consumer) messageFetcher() {
 			c.messageWg.Add(1)
 			c.stats.IncrementMessageCount(1)
 
-			msging.messageCh <- messageItem
+			c.messageCh <- messageItem
 		}
 
 		//Check for a pause signal
@@ -214,7 +243,6 @@ func (c *consumer) messageFetcher() {
 			c.consumerStopWg.Done()
 			return
 		}
-
 	}
 }
 
@@ -228,27 +256,41 @@ func (c *consumer) Start() error {
 		return nil
 	}
 
+	// Start the topic-specific workers if configured
+	if c.workerCount > 0 {
+		c.workerWg.Add(c.workerCount)
+		for i := 0; i < c.workerCount; i++ {
+			go c.processMessageWorker()
+		}
+	}
+
 	//Start the message fetcher
 	go c.messageFetcher()
 	c.consumerRunning = true
 	return nil
 }
 
-func (c *consumer) Stop() error {
+func (c *consumer) Stop() {
 	if c.stopConsumer {
 		//Consumer is already stopped
-		return nil
+		return
 	}
 
 	c.consumerStopWg.Add(1)
 	c.stopConsumer = true
 	c.canc()
 
+	// Wait for message fetcher to stop
 	c.consumerStopWg.Wait()
 	c.consumerRunning = false
 
+	// Close the message channel and wait for workers to finish
+	if c.workerCount > 0 {
+		close(c.messageCh)
+		c.workerWg.Wait()
+	}
+
 	c.pulsarc.Close()
-	return nil
 }
 
 func (c *consumer) Unsubscribe() error {
@@ -340,6 +382,9 @@ const (
 type ConsumerOpts struct {
 	SubscriptionName string
 	InitialPosition  InitialPosition
+	// WorkerCount specifies the number of goroutines to process messages for this consumer.
+	// If 0, messages will be processed using the global workers from InitMessaging.
+	WorkerCount int
 }
 
 func toInitialPosition(p InitialPosition) pulsar.SubscriptionInitialPosition {
@@ -462,6 +507,16 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 
 		messageWg:      &sync.WaitGroup{},
 		consumerStopWg: &sync.WaitGroup{},
+		workerWg:       &sync.WaitGroup{},
+	}
+
+	// Set up topic-specific workers if WorkerCount > 0
+	if opts.WorkerCount > 0 {
+		consumer.workerCount = opts.WorkerCount
+		consumer.messageCh = make(chan *messageItem, opts.WorkerCount*2)
+	} else {
+		// Use global message channel if no topic-specific workers
+		consumer.messageCh = msging.messageCh
 	}
 	return consumer, nil
 }
