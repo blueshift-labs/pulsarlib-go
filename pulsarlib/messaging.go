@@ -42,7 +42,7 @@ type Consumer interface {
 	//This function will start the consumption of messages.
 	Start() error
 	//This function will flush any existing messages and stop the consumer client.
-	Stop() error
+	Stop()
 	//This function will delete the subscription created by the consumer.
 	Unsubscribe() error
 	//This function will flush existing messages and pause further consumption.
@@ -270,10 +270,10 @@ func (c *consumer) Start() error {
 	return nil
 }
 
-func (c *consumer) Stop() error {
+func (c *consumer) Stop() {
 	if c.stopConsumer {
 		//Consumer is already stopped
-		return nil
+		return
 	}
 
 	c.consumerStopWg.Add(1)
@@ -291,7 +291,6 @@ func (c *consumer) Stop() error {
 	}
 
 	c.pulsarc.Close()
-	return nil
 }
 
 func (c *consumer) Unsubscribe() error {
