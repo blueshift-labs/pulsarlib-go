@@ -18,6 +18,7 @@
 package pulsar
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -145,6 +146,13 @@ func (id *messageID) equal(other *messageID) bool {
 	return id.ledgerID == other.ledgerID &&
 		id.entryID == other.entryID &&
 		id.batchIdx == other.batchIdx
+}
+
+func (id *messageID) compareLedgerAndEntryID(other *messageID) int {
+	if result := cmp.Compare(id.ledgerID, other.ledgerID); result != 0 {
+		return result
+	}
+	return cmp.Compare(id.entryID, other.entryID)
 }
 
 func (id *messageID) greaterEqual(other *messageID) bool {
@@ -402,6 +410,12 @@ type ackTracker struct {
 	size           uint
 	batchIDs       *bitset.BitSet
 	prevBatchAcked uint32
+}
+
+func (t *ackTracker) getAckBitSet() *bitset.BitSet {
+	t.Lock()
+	defer t.Unlock()
+	return t.batchIDs.Clone()
 }
 
 func (t *ackTracker) ack(batchID int) bool {

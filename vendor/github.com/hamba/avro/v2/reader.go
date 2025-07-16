@@ -60,7 +60,7 @@ func (r *Reader) Reset(b []byte) *Reader {
 	return r
 }
 
-// ReportError record a error in iterator instance with current position.
+// ReportError record an error in iterator instance with current position.
 func (r *Reader) ReportError(operation, msg string) {
 	if r.Error != nil && !errors.Is(r.Error, io.EOF) {
 		return
@@ -287,7 +287,7 @@ func (r *Reader) readBytes(op string) []byte {
 	if size == 0 {
 		return []byte{}
 	}
-	if max := r.cfg.getMaxByteSliceSize(); max > 0 && size > max {
+	if maxSize := r.cfg.getMaxByteSliceSize(); maxSize > 0 && size > maxSize {
 		fnName := "Read" + strings.ToTitle(op)
 		r.ReportError(fnName, "size is greater than `Config.MaxByteSliceSize`")
 		return nil

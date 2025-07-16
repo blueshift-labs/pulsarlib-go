@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/go-viper/mapstructure/v2"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/mitchellh/mapstructure"
 )
 
 var (
@@ -252,7 +252,7 @@ func parseProtocol(m map[string]any, seen seenCache, cache *SchemaCache) (*Proto
 		return nil, fmt.Errorf("avro: error decoding protocol: %w", err)
 	}
 
-	if err := checkParsedName(p.Protocol, p.Namespace, hasKey(meta.Keys, "namespace")); err != nil {
+	if err := checkParsedName(p.Protocol); err != nil {
 		return nil, err
 	}
 

@@ -1,4 +1,4 @@
-// Copyright 2016 Yahoo Inc.
+// Copyright The Athenz Authors
 // Licensed under the terms of the Apache version 2.0 license. See LICENSE file for terms.
 
 package zmssvctoken
@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -57,7 +57,7 @@ func (k *keyStore) loadKey(src keySource) ([]byte, error) {
 		return nil, fmt.Errorf("ZTS returned status %d", res.StatusCode)
 	}
 
-	b, err := ioutil.ReadAll(res.Body)
+	b, err := io.ReadAll(res.Body)
 	res.Body.Close()
 	if err != nil {
 		return nil, err

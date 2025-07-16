@@ -8,12 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/go-viper/mapstructure/v2"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/mitchellh/mapstructure"
 )
 
 // DefaultSchemaCache is the default cache for schemas.
 var DefaultSchemaCache = &SchemaCache{}
+
+// SkipNameValidation sets whether to skip name validation.
+// Avro spec incurs a strict naming convention for names and aliases, however official Avro tools do not follow that
+// More info:
+// https://lists.apache.org/thread/39v98os6wdpyr6w31xdkz0yzol51fsrr
+// https://github.com/apache/avro/pull/1995
+var SkipNameValidation = false
 
 // Parse parses a schema string.
 func Parse(schema string) (Schema, error) {
@@ -25,7 +32,7 @@ func ParseWithCache(schema, namespace string, cache *SchemaCache) (Schema, error
 	return ParseBytesWithCache([]byte(schema), namespace, cache)
 }
 
-// MustParse parses a schema string, panicing if there is an error.
+// MustParse parses a schema string, panicking if there is an error.
 func MustParse(schema string) Schema {
 	parsed, err := Parse(schema)
 	if err != nil {
@@ -46,7 +53,7 @@ func ParseFiles(paths ...string) (Schema, error) {
 			return nil, err
 		}
 
-		schema, err = Parse(string(s))
+		schema, err = ParseBytes(s)
 		if err != nil {
 			return nil, err
 		}
@@ -67,11 +74,17 @@ func ParseBytesWithCache(schema []byte, namespace string, cache *SchemaCache) (S
 		json = string(schema)
 	}
 
+	internalCache := &SchemaCache{}
+	internalCache.AddAll(cache)
+
 	seen := seenCache{}
-	s, err := parseType(namespace, json, seen, cache)
+	s, err := parseType(namespace, json, seen, internalCache)
 	if err != nil {
 		return nil, err
 	}
+
+	cache.AddAll(internalCache)
+
 	return derefSchema(s), nil
 }
 
@@ -114,6 +127,12 @@ func parsePrimitiveType(namespace, s string, cache *SchemaCache) (Schema, error)
 
 func parseComplexType(namespace string, m map[string]any, seen seenCache, cache *SchemaCache) (Schema, error) {
 	if val, ok := m["type"].([]any); ok {
+		// Note: According to the spec, this is not allowed:
+		// 		https://avro.apache.org/docs/1.12.0/specification/#schema-declaration
+		// The "type" property in an object must be a string. A union type will be a slice,
+		// but NOT an object with a "type" property that is a slice.
+		// Might be advisable to remove this call (tradeoff between better conformance
+		// with the spec vs. possible backwards-compatibility issue).
 		return parseUnion(namespace, val, seen, cache)
 	}
 
@@ -124,10 +143,7 @@ func parseComplexType(namespace string, m map[string]any, seen seenCache, cache 
 	typ := Type(str)
 
 	switch typ {
-	case Null:
-		return &NullSchema{}, nil
-
-	case String, Bytes, Int, Long, Float, Double, Boolean:
+	case String, Bytes, Int, Long, Float, Double, Boolean, Null:
 		return parsePrimitive(typ, m)
 
 	case Record, Error:
@@ -151,14 +167,15 @@ func parseComplexType(namespace string, m map[string]any, seen seenCache, cache 
 }
 
 type primitiveSchema struct {
-	LogicalType string         `mapstructure:"logicalType"`
-	Precision   int            `mapstructure:"precision"`
-	Scale       int            `mapstructure:"scale"`
-	Props       map[string]any `mapstructure:",remain"`
+	Type  string         `mapstructure:"type"`
+	Props map[string]any `mapstructure:",remain"`
 }
 
 func parsePrimitive(typ Type, m map[string]any) (Schema, error) {
-	if m == nil {
+	if len(m) == 0 {
+		if typ == Null {
+			return &NullSchema{}, nil
+		}
 		return NewPrimitiveSchema(typ, nil), nil
 	}
 
@@ -171,14 +188,20 @@ func parsePrimitive(typ Type, m map[string]any) (Schema, error) {
 	}
 
 	var logical LogicalSchema
-	if p.LogicalType != "" {
-		logical = parsePrimitiveLogicalType(typ, p.LogicalType, p.Precision, p.Scale)
+	if logicalType := logicalTypeProperty(p.Props); logicalType != "" {
+		logical = parsePrimitiveLogicalType(typ, logicalType, p.Props)
+		if logical != nil {
+			delete(p.Props, "logicalType")
+		}
 	}
 
+	if typ == Null {
+		return NewNullSchema(WithProps(p.Props)), nil
+	}
 	return NewPrimitiveSchema(typ, logical, WithProps(p.Props)), nil
 }
 
-func parsePrimitiveLogicalType(typ Type, lt string, prec, scale int) LogicalSchema {
+func parsePrimitiveLogicalType(typ Type, lt string, props map[string]any) LogicalSchema {
 	ltyp := LogicalType(lt)
 	if (typ == String && ltyp == UUID) ||
 		(typ == Int && ltyp == Date) ||
@@ -192,10 +215,10 @@ func parsePrimitiveLogicalType(typ Type, lt string, prec, scale int) LogicalSche
 	}
 
 	if typ == Bytes && ltyp == Decimal {
-		return parseDecimalLogicalType(-1, prec, scale)
+		return parseDecimalLogicalType(-1, props)
 	}
 
-	return nil
+	return nil // otherwise, not a recognized logical type
 }
 
 type recordSchema struct {
@@ -217,7 +240,7 @@ func parseRecord(typ Type, namespace string, m map[string]any, seen seenCache, c
 		return nil, fmt.Errorf("avro: error decoding record: %w", err)
 	}
 
-	if err := checkParsedName(r.Name, r.Namespace, hasKey(meta.Keys, "namespace")); err != nil {
+	if err := checkParsedName(r.Name); err != nil {
 		return nil, err
 	}
 	if r.Namespace == "" {
@@ -257,11 +280,18 @@ func parseRecord(typ Type, namespace string, m map[string]any, seen seenCache, c
 		cache.Add(alias, ref)
 	}
 
+	fieldNames := make(map[string]struct{})
 	for i, f := range r.Fields {
 		field, err := parseField(rec.namespace, f, seen, cache)
 		if err != nil {
 			return nil, err
 		}
+
+		if _, exists := fieldNames[field.name]; exists {
+			return nil, fmt.Errorf("avro: duplicate field name %q", field.name)
+		}
+		fieldNames[field.name] = struct{}{}
+
 		fields[i] = field
 	}
 
@@ -287,7 +317,7 @@ func parseField(namespace string, m map[string]any, seen seenCache, cache *Schem
 		return nil, fmt.Errorf("avro: error decoding field: %w", err)
 	}
 
-	if err := checkParsedName(f.Name, "", false); err != nil {
+	if err := checkParsedName(f.Name); err != nil {
 		return nil, err
 	}
 
@@ -333,7 +363,7 @@ func parseEnum(namespace string, m map[string]any, seen seenCache, cache *Schema
 		return nil, fmt.Errorf("avro: error decoding enum: %w", err)
 	}
 
-	if err := checkParsedName(e.Name, e.Namespace, hasKey(meta.Keys, "namespace")); err != nil {
+	if err := checkParsedName(e.Name); err != nil {
 		return nil, err
 	}
 	if e.Namespace == "" {
@@ -361,6 +391,7 @@ func parseEnum(namespace string, m map[string]any, seen seenCache, cache *Schema
 }
 
 type arraySchema struct {
+	Type  string         `mapstructure:"type"`
 	Items any            `mapstructure:"items"`
 	Props map[string]any `mapstructure:",remain"`
 }
@@ -386,6 +417,7 @@ func parseArray(namespace string, m map[string]any, seen seenCache, cache *Schem
 }
 
 type mapSchema struct {
+	Type   string         `mapstructure:"type"`
 	Values any            `mapstructure:"values"`
 	Props  map[string]any `mapstructure:",remain"`
 }
@@ -424,15 +456,12 @@ func parseUnion(namespace string, v []any, seen seenCache, cache *SchemaCache) (
 }
 
 type fixedSchema struct {
-	Name        string         `mapstructure:"name"`
-	Namespace   string         `mapstructure:"namespace"`
-	Aliases     []string       `mapstructure:"aliases"`
-	Type        string         `mapstructure:"type"`
-	Size        int            `mapstructure:"size"`
-	LogicalType string         `mapstructure:"logicalType"`
-	Precision   int            `mapstructure:"precision"`
-	Scale       int            `mapstructure:"scale"`
-	Props       map[string]any `mapstructure:",remain"`
+	Name      string         `mapstructure:"name"`
+	Namespace string         `mapstructure:"namespace"`
+	Aliases   []string       `mapstructure:"aliases"`
+	Type      string         `mapstructure:"type"`
+	Size      int            `mapstructure:"size"`
+	Props     map[string]any `mapstructure:",remain"`
 }
 
 func parseFixed(namespace string, m map[string]any, seen seenCache, cache *SchemaCache) (Schema, error) {
@@ -444,7 +473,7 @@ func parseFixed(namespace string, m map[string]any, seen seenCache, cache *Schem
 		return nil, fmt.Errorf("avro: error decoding fixed: %w", err)
 	}
 
-	if err := checkParsedName(f.Name, f.Namespace, hasKey(meta.Keys, "namespace")); err != nil {
+	if err := checkParsedName(f.Name); err != nil {
 		return nil, err
 	}
 	if f.Namespace == "" {
@@ -456,8 +485,11 @@ func parseFixed(namespace string, m map[string]any, seen seenCache, cache *Schem
 	}
 
 	var logical LogicalSchema
-	if f.LogicalType != "" {
-		logical = parseFixedLogicalType(f.Size, f.LogicalType, f.Precision, f.Scale)
+	if logicalType := logicalTypeProperty(f.Props); logicalType != "" {
+		logical = parseFixedLogicalType(f.Size, logicalType, f.Props)
+		if logical != nil {
+			delete(f.Props, "logicalType")
+		}
 	}
 
 	fixed, err := NewFixedSchema(f.Name, f.Namespace, f.Size, logical, WithAliases(f.Aliases), WithProps(f.Props))
@@ -478,19 +510,41 @@ func parseFixed(namespace string, m map[string]any, seen seenCache, cache *Schem
 	return fixed, nil
 }
 
-func parseFixedLogicalType(size int, lt string, prec, scale int) LogicalSchema {
+func parseFixedLogicalType(size int, lt string, props map[string]any) LogicalSchema {
 	ltyp := LogicalType(lt)
 	switch {
 	case ltyp == Duration && size == 12:
 		return NewPrimitiveLogicalSchema(Duration)
 	case ltyp == Decimal:
-		return parseDecimalLogicalType(size, prec, scale)
+		return parseDecimalLogicalType(size, props)
 	}
 
 	return nil
 }
 
-func parseDecimalLogicalType(size, prec, scale int) LogicalSchema {
+type decimalSchema struct {
+	Precision int `mapstructure:"precision"`
+	Scale     int `mapstructure:"scale"`
+}
+
+func parseDecimalLogicalType(size int, props map[string]any) LogicalSchema {
+	var (
+		d    decimalSchema
+		meta mapstructure.Metadata
+	)
+	if err := decodeMap(props, &d, &meta); err != nil {
+		return nil
+	}
+	decType := newDecimalLogicalType(size, d.Precision, d.Scale)
+	if decType != nil {
+		// Remove the properties that we consumed
+		delete(props, "precision")
+		delete(props, "scale")
+	}
+	return decType
+}
+
+func newDecimalLogicalType(size, prec, scale int) LogicalSchema {
 	if prec <= 0 {
 		return nil
 	}
@@ -522,12 +576,9 @@ func fullName(namespace, name string) string {
 	return namespace + "." + name
 }
 
-func checkParsedName(name, ns string, hasNS bool) error {
+func checkParsedName(name string) error {
 	if name == "" {
 		return errors.New("avro: non-empty name key required")
-	}
-	if hasNS && ns == "" {
-		return errors.New("avro: namespace key must be non-empty or omitted")
 	}
 	return nil
 }
@@ -557,6 +608,13 @@ func derefSchema(schema Schema) Schema {
 
 	return walkSchema(schema, func(schema Schema) Schema {
 		if ns, ok := schema.(NamedSchema); ok {
+			if _, hasSeen := seen[ns.FullName()]; hasSeen {
+				// This NamedSchema has been seen in this run, it needs
+				// to be turned into a reference. It is possible it was
+				// dereferenced in a previous run.
+				return NewRefSchema(ns)
+			}
+
 			seen[ns.FullName()] = struct{}{}
 			return schema
 		}
@@ -582,4 +640,11 @@ func (c seenCache) Add(name string) error {
 	}
 	c[name] = struct{}{}
 	return nil
+}
+
+func logicalTypeProperty(props map[string]any) string {
+	if lt, ok := props["logicalType"].(string); ok {
+		return lt
+	}
+	return ""
 }

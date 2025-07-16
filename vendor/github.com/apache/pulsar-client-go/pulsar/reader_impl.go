@@ -112,7 +112,7 @@ func newReader(client *client, options ReaderOptions) (Reader, error) {
 		ReplicateSubscriptionState:  false,
 		Decryption:                  options.Decryption,
 		Schema:                      options.Schema,
-		BackoffPolicy:               options.BackoffPolicy,
+		BackOffPolicyFunc:           options.BackoffPolicyFunc,
 		MaxPendingChunkedMessage:    options.MaxPendingChunkedMessage,
 		ExpireTimeOfIncompleteChunk: options.ExpireTimeOfIncompleteChunk,
 		AutoAckIncompleteChunk:      options.AutoAckIncompleteChunk,
@@ -128,12 +128,13 @@ func newReader(client *client, options ReaderOptions) (Reader, error) {
 	}
 
 	// Provide dummy dlq router with not dlq policy
-	dlq, err := newDlqRouter(client, nil, options.Topic, options.SubscriptionName, options.Name, client.log)
+	dlq, err := newDlqRouter(client, nil, options.Topic, options.SubscriptionName, options.Name,
+		options.BackoffPolicyFunc, client.log)
 	if err != nil {
 		return nil, err
 	}
 	// Provide dummy rlq router with not dlq policy
-	rlq, err := newRetryRouter(client, nil, false, client.log)
+	rlq, err := newRetryRouter(client, nil, false, options.BackoffPolicyFunc, client.log)
 	if err != nil {
 		return nil, err
 	}
@@ -195,19 +196,6 @@ func (r *reader) Close() {
 	r.metrics.ReadersClosed.Inc()
 }
 
-func (r *reader) messageID(msgID MessageID) *trackingMessageID {
-	mid := toTrackingMessageID(msgID)
-
-	partition := int(mid.partitionIdx)
-	// did we receive a valid partition index?
-	if partition < 0 {
-		r.log.Warnf("invalid partition index %d expected", partition)
-		return nil
-	}
-
-	return mid
-}
-
 func (r *reader) Seek(msgID MessageID) error {
 	r.Lock()
 	defer r.Unlock()
@@ -217,9 +205,12 @@ func (r *reader) Seek(msgID MessageID) error {
 		return fmt.Errorf("invalid message id type %T", msgID)
 	}
 
-	mid := r.messageID(msgID)
-	if mid == nil {
-		return nil
+	mid := toTrackingMessageID(msgID)
+
+	partition := int(mid.partitionIdx)
+	if partition < 0 {
+		r.log.Warnf("invalid partition index %d expected", partition)
+		return fmt.Errorf("seek msgId must include partitoinIndex")
 	}
 
 	return r.c.Seek(mid)

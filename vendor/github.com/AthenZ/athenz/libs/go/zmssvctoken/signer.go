@@ -1,4 +1,4 @@
-// Copyright 2016 Yahoo Inc.
+// Copyright The Athenz Authors
 // Licensed under the terms of the Apache version 2.0 license. See LICENSE file for terms.
 
 package zmssvctoken
@@ -13,7 +13,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"strings"
+
+	"github.com/AthenZ/athenz/libs/go/athenzutils"
 )
 
 var hash = crypto.SHA256
@@ -42,27 +43,11 @@ func hashString(input string) ([]byte, error) {
 
 // NewSigner creates an instance of Signer using the given private key (ECDSA or RSA).
 func NewSigner(privateKeyPEM []byte) (Signer, error) {
-	block, _ := pem.Decode(privateKeyPEM)
-	if block == nil {
-		return nil, fmt.Errorf("Unable to load private key")
+	key, _, err := athenzutils.ExtractSignerInfo(privateKeyPEM)
+	if err != nil {
+		return nil, err
 	}
-
-	switch block.Type {
-	case "EC PRIVATE KEY":
-		key, err := x509.ParseECPrivateKey(block.Bytes)
-		if err != nil {
-			return nil, err
-		}
-		return &sign{key: key}, nil
-	case "RSA PRIVATE KEY":
-		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			return nil, err
-		}
-		return &sign{key: key}, nil
-	default:
-		return nil, fmt.Errorf("Unsupported private key type: %s", block.Type)
-	}
+	return &sign{key: key}, nil
 }
 
 type sign struct {
@@ -119,9 +104,6 @@ func NewVerifier(publicKeyPEM []byte) (Verifier, error) {
 	block, _ := pem.Decode(publicKeyPEM)
 	if block == nil {
 		return nil, fmt.Errorf("Unable to load public key")
-	}
-	if !strings.HasSuffix(block.Type, "PUBLIC KEY") {
-		return nil, fmt.Errorf("Invalid public key type: %s", block.Type)
 	}
 
 	xkey, err := x509.ParsePKIXPublicKey(block.Bytes)

@@ -24,6 +24,15 @@ type Ctx interface {
 	// prevent allocation.  If it is too small, or if nil is passed, a new buffer
 	// will be allocated and returned.
 	Decompress(dst, src []byte) ([]byte, error)
+
+	// DecompressInto decompresses src into dst. Unlike Decompress, DecompressInto
+	// requires that dst be sufficiently large to hold the decompressed payload.
+	// DecompressInto may be used when the caller knows the size of the decompressed
+	// payload before attempting decompression.
+	//
+	// It returns the number of bytes copied and an error if any is encountered. If
+	// dst is too small, DecompressInto errors.
+	DecompressInto(dst, src []byte) (int, error)
 }
 
 type ctx struct {
@@ -96,49 +105,37 @@ func (c *ctx) Decompress(dst, src []byte) ([]byte, error) {
 	if len(src) == 0 {
 		return []byte{}, ErrEmptySlice
 	}
-	decompress := func(dst, src []byte) ([]byte, error) {
 
-		cWritten := C.ZSTD_decompressDCtx(
-			c.dctx,
-			unsafe.Pointer(&dst[0]),
-			C.size_t(len(dst)),
-			unsafe.Pointer(&src[0]),
-			C.size_t(len(src)))
+	bound := decompressSizeHint(src)
+	if cap(dst) >= bound {
+		dst = dst[0:cap(dst)]
+	} else {
+		dst = make([]byte, bound)
+	}
 
-		written := int(cWritten)
-		// Check error
-		if err := getError(written); err != nil {
-			return nil, err
-		}
+	written, err := c.DecompressInto(dst, src)
+	if err == nil {
 		return dst[:written], nil
 	}
-
-	if len(dst) == 0 {
-		// Attempt to use zStd to determine decompressed size (may result in error or 0)
-		size := int(C.size_t(C.ZSTD_getDecompressedSize(unsafe.Pointer(&src[0]), C.size_t(len(src)))))
-
-		if err := getError(size); err != nil {
-			return nil, err
-		}
-
-		if size > 0 {
-			dst = make([]byte, size)
-		} else {
-			dst = make([]byte, len(src)*3) // starting guess
-		}
-	}
-	for i := 0; i < 3; i++ { // 3 tries to allocate a bigger buffer
-		result, err := decompress(dst, src)
-		if !IsDstSizeTooSmallError(err) {
-			return result, err
-		}
-		dst = make([]byte, len(dst)*2) // Grow buffer by 2
+	if !IsDstSizeTooSmallError(err) {
+		return nil, err
 	}
 
 	// We failed getting a dst buffer of correct size, use stream API
 	r := NewReader(bytes.NewReader(src))
 	defer r.Close()
 	return ioutil.ReadAll(r)
+}
+
+func (c *ctx) DecompressInto(dst, src []byte) (int, error) {
+	written := int(C.ZSTD_decompressDCtx(
+		c.dctx,
+		unsafe.Pointer(&dst[0]),
+		C.size_t(len(dst)),
+		unsafe.Pointer(&src[0]),
+		C.size_t(len(src))))
+	err := getError(written)
+	return written, err
 }
 
 func finalizeCtx(c *ctx) {

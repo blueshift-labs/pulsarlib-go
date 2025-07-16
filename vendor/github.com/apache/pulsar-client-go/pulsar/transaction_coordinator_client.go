@@ -24,6 +24,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apache/pulsar-client-go/pulsar/backoff"
+
 	"github.com/apache/pulsar-client-go/pulsar/internal"
 	pb "github.com/apache/pulsar-client-go/pulsar/internal/pulsar_proto"
 	"github.com/apache/pulsar-client-go/pulsar/log"
@@ -44,6 +46,7 @@ type transactionHandler struct {
 	tc              *transactionCoordinatorClient
 	state           uAtomic.Int32
 	conn            uAtomic.Value
+	cnxKeySuffix    int32
 	partition       uint64
 	closeCh         chan any
 	requestCh       chan any
@@ -65,6 +68,7 @@ func (t *transactionHandler) getState() txnHandlerState {
 func (tc *transactionCoordinatorClient) newTransactionHandler(partition uint64) (*transactionHandler, error) {
 	handler := &transactionHandler{
 		tc:              tc,
+		cnxKeySuffix:    tc.client.cnxPool.GenerateRoundRobinIndex(),
 		partition:       partition,
 		closeCh:         make(chan any),
 		requestCh:       make(chan any),
@@ -93,8 +97,8 @@ func (t *transactionHandler) grabConn() error {
 		TcId:      proto.Uint64(t.partition),
 	}
 
-	res, err := t.tc.client.rpcClient.Request(lr.LogicalAddr, lr.PhysicalAddr, requestID,
-		pb.BaseCommand_TC_CLIENT_CONNECT_REQUEST, &cmdTCConnect)
+	res, err := t.tc.client.rpcClient.RequestWithCnxKeySuffix(lr.LogicalAddr, lr.PhysicalAddr, t.cnxKeySuffix,
+		requestID, pb.BaseCommand_TC_CLIENT_CONNECT_REQUEST, &cmdTCConnect)
 
 	if err != nil {
 		t.log.WithError(err).Error("Failed to connect transaction_impl coordinator " +
@@ -143,43 +147,39 @@ func (t *transactionHandler) runEventsLoop() {
 
 func (t *transactionHandler) reconnectToBroker() {
 	var delayReconnectTime time.Duration
-	var defaultBackoff = internal.DefaultBackoff{}
+	var defaultBackoff = backoff.DefaultBackoff{}
 
-	for {
+	opFn := func() (struct{}, error) {
 		if t.getState() == txnHandlerClosed {
 			// The handler is already closing
 			t.log.Info("transaction handler is closed, exit reconnect")
-			return
-		}
-
-		delayReconnectTime = defaultBackoff.Next()
-
-		t.log.WithFields(log.Fields{
-			"delayReconnectTime": delayReconnectTime,
-		}).Info("Transaction handler will reconnect to the transaction coordinator")
-		time.Sleep(delayReconnectTime)
-
-		// double check
-		if t.getState() == txnHandlerClosed {
-			// Txn handler is already closing
-			t.log.Info("transaction handler is closed, exit reconnect")
-			return
+			return struct{}{}, nil
 		}
 
 		err := t.grabConn()
 		if err == nil {
 			// Successfully reconnected
 			t.log.Info("Reconnected transaction handler to broker")
-			return
+			return struct{}{}, nil
 		}
+
 		t.log.WithError(err).Error("Failed to create transaction handler at reconnect")
 		errMsg := err.Error()
 		if strings.Contains(errMsg, errMsgTopicNotFound) {
 			// when topic is deleted, we should give up reconnection.
 			t.log.Warn("Topic Not Found")
-			break
+			return struct{}{}, nil
 		}
+		return struct{}{}, err
 	}
+
+	_, _ = internal.Retry(context.Background(), opFn, func(_ error) time.Duration {
+		delayReconnectTime = defaultBackoff.Next()
+		t.log.WithFields(log.Fields{
+			"delayReconnectTime": delayReconnectTime,
+		}).Info("Transaction handler will reconnect to the transaction coordinator")
+		return delayReconnectTime
+	})
 }
 
 func (t *transactionHandler) checkRetriableError(err error, op any) bool {
@@ -319,7 +319,7 @@ func (t *transactionHandler) endTxn(op *endTxnOp) {
 }
 
 func (t *transactionHandler) close() {
-	if !t.state.CAS(txnHandlerReady, txnHandlerClosed) {
+	if !t.state.CompareAndSwap(txnHandlerReady, txnHandlerClosed) {
 		return
 	}
 	close(t.closeCh)

@@ -68,53 +68,111 @@ More examples in the [godoc](https://pkg.go.dev/github.com/hamba/avro/v2).
 
 #### Types Conversions
 
-| Avro                          | Go Struct                                              | Go Interface             |
-|-------------------------------|--------------------------------------------------------|--------------------------|
-| `null`                        | `nil`                                                  | `nil`                    |
-| `boolean`                     | `bool`                                                 | `bool`                   |
-| `bytes`                       | `[]byte`                                               | `[]byte`                 |
-| `float`                       | `float32`                                              | `float32`                |
-| `double`                      | `float64`                                              | `float64`                |
-| `long`                        | `int64`, `uint32`\*                                    | `int64`, `uint32`        |
-| `int`                         | `int`, `int32`, `int16`, `int8`, `uint8`\*, `uint16`\* | `int`, `uint8`, `uint16` |
-| `fixed`                       | `uint64`                                               | `uint64`                 |
-| `string`                      | `string`                                               | `string`                 |
-| `array`                       | `[]T`                                                  | `[]any`                  |
-| `enum`                        | `string`                                               | `string`                 |
-| `fixed`                       | `[n]byte`                                              | `[n]byte`                |
-| `map`                         | `map[string]T{}`                                       | `map[string]any`         |
-| `record`                      | `struct`                                               | `map[string]any`         |
-| `union`                       | *see below*                                            | *see below*              |
-| `int.date`                    | `time.Time`                                            | `time.Time`              |
-| `int.time-millis`             | `time.Duration`                                        | `time.Duration`          |
-| `long.time-micros`            | `time.Duration`                                        | `time.Duration`          |
-| `long.timestamp-millis`       | `time.Time`                                            | `time.Time`              |
-| `long.timestamp-micros`       | `time.Time`                                            | `time.Time`              |
-| `long.local-timestamp-millis` | `time.Time`                                            | `time.Time`              |
-| `long.local-timestamp-micros` | `time.Time`                                            | `time.Time`              |
-| `bytes.decimal`               | `*big.Rat`                                             | `*big.Rat`               |
-| `fixed.decimal`               | `*big.Rat`                                             | `*big.Rat`               |
-| `string.uuid`                 | `string`                                               | `string`                 |
+| Avro                          | Go Struct                                                  | Go Interface             |
+|-------------------------------|------------------------------------------------------------|--------------------------|
+| `null`                        | `nil`                                                      | `nil`                    |
+| `boolean`                     | `bool`                                                     | `bool`                   |
+| `bytes`                       | `[]byte`                                                   | `[]byte`                 |
+| `float`                       | `float32`                                                  | `float32`                |
+| `double`                      | `float64`                                                  | `float64`                |
+| `long`                        | `int`\*, `int64`, `uint32`\**                              | `int`, `int64`, `uint32` |
+| `int`                         | `int`\*, `int32`, `int16`, `int8`, `uint8`\**, `uint16`\** | `int`, `uint8`, `uint16` |
+| `fixed`                       | `uint64`                                                   | `uint64`                 |
+| `string`                      | `string`                                                   | `string`                 |
+| `array`                       | `[]T`                                                      | `[]any`                  |
+| `enum`                        | `string`                                                   | `string`                 |
+| `fixed`                       | `[n]byte`                                                  | `[n]byte`                |
+| `map`                         | `map[string]T{}`                                           | `map[string]any`         |
+| `record`                      | `struct`                                                   | `map[string]any`         |
+| `union`                       | *see below*                                                | *see below*              |
+| `int.date`                    | `time.Time`                                                | `time.Time`              |
+| `int.time-millis`             | `time.Duration`                                            | `time.Duration`          |
+| `long.time-micros`            | `time.Duration`                                            | `time.Duration`          |
+| `long.timestamp-millis`       | `time.Time`                                                | `time.Time`              |
+| `long.timestamp-micros`       | `time.Time`                                                | `time.Time`              |
+| `long.local-timestamp-millis` | `time.Time`                                                | `time.Time`              |
+| `long.local-timestamp-micros` | `time.Time`                                                | `time.Time`              |
+| `bytes.decimal`               | `*big.Rat`                                                 | `*big.Rat`               |
+| `fixed.decimal`               | `*big.Rat`                                                 | `*big.Rat`               |
+| `string.uuid`                 | `string`                                                   | `string`                 |
 
-\* Please note that when the Go type is an unsigned integer care must be taken to ensure that information is not lost 
+\* Please note that the size of the Go type `int` is platform dependent. Decoding an Avro `long` into a Go `int` is
+only allowed on 64-bit platforms and will result in an error on 32-bit platforms. Similarly, be careful when encoding a
+Go `int` using Avro `int` on a 64-bit platform, as that can result in an integer overflow causing misinterpretation of
+the data.
+
+\** Please note that when the Go type is an unsigned integer care must be taken to ensure that information is not lost
 when converting between the Avro type and Go type. For example, storing a *negative* number in Avro of `int = -100`
-would be interpreted as `uint16 = 65,436` in Go. Another example would be storing numbers in Avro `int = 256` that 
-are larger than the Go type `uint8 = 0`. 
+would be interpreted as `uint16 = 65,436` in Go. Another example would be storing numbers in Avro `int = 256` that
+are larger than the Go type `uint8 = 0`.
 
 ##### Unions
 
 The following union types are accepted: `map[string]any`, `*T` and `any`.
 
-* **map[string]any:** If the union value is `nil`, a `nil` map will be en/decoded. 
+* **map[string]any:** If the union value is `nil`, a `nil` map will be en/decoded.
 When a non-`nil` union value is encountered, a single key is en/decoded. The key is the avro
-type name, or scheam full name in the case of a named schema (enum, fixed or record).
-* ***T:** This is allowed in a "nullable" union. A nullable union is defined as a two schema union, 
-with one of the types being `null` (ie. `["null", "string"]` or `["string", "null"]`), in this case 
+type name, or schema full name in the case of a named schema (enum, fixed or record).
+* ***T:** This is allowed in a "nullable" union. A nullable union is defined as a two schema union,
+with one of the types being `null` (ie. `["null", "string"]` or `["string", "null"]`), in this case
 a `*T` is allowed, with `T` matching the conversion table above. In the case of a slice, the slice can be used
 directly.
+* ***struct{}:** implementing the `UnionConverter` interface:
+
+```go
+// UnionConverter to handle Avro Union's in a type-safe way
+type UnionConverter interface {
+    // FromAny payload decode into any of the mentioned types in the Union.
+    FromAny(payload any) error
+    // ToAny from the Union struct
+    ToAny() (any, error)
+}
+
+// for example:
+const Schema = `{"name": "Payload", "type": "record", "fields": [{"name": "union", "type": ["int", {"type": "record", "name": "test", "fields" : [{"name": "a", "type": "long"}, {"name": "b", "type": "string"}]}]}]}`
+
+type Payload struct {
+    Union *UnionRecord `avro:"union"`
+}
+
+type UnionRecord struct {
+    Int  *int
+    Test *TestRecord
+}
+
+func (u *UnionRecord) ToAny() (any, error) {
+    if u.Int != nil {
+        return u.Int, nil
+    } else if u.Test != nil {
+        return u.Test, nil
+    }
+
+    return nil, errors.New("no value to encode")
+}
+
+func (u *UnionRecord) FromAny(payload any) error {
+    switch t := payload.(type) {
+    case int:
+        u.Int = &t
+    case TestRecord:
+        u.Test = &t
+    default:
+        return errors.New("unknown type during decode of union")
+    }
+
+    return nil
+}
+
+type TestRecord struct {
+    A int64  `avro:"a"`
+    B string `avro:"b"`
+}
+```
+Note due to way Go checks if some type implements these interface, the type used _must_ be a pointer as the interface methods _must_
+be implemented with pointer receivers.
 * **any:** An `interface` can be provided and the type or name resolved. Primitive types
-are pre-registered, but named types, maps and slices will need to be registered with the `Register` function. 
-In the case of arrays and maps the enclosed schema type or name is postfix to the type with a `:` separator, 
+are pre-registered, but named types, maps and slices will need to be registered with the `Register` function.
+In the case of arrays and maps the enclosed schema type or name is postfix to the type with a `:` separator,
 e.g `"map:string"`. Behavior when a type cannot be resolved will depend on your chosen configuation options:
 	* !Config.UnionResolutionError && !Config.PartialUnionTypeResolution: the map type above is used
 	* Config.UnionResolutionError && !Config.PartialUnionTypeResolution: an error is returned
@@ -131,10 +189,17 @@ Enums may also implement `TextMarshaler` and `TextUnmarshaler`, and must resolve
 
 ##### Identical Underlying Types
 
-One type can be [ConvertibleTo](https://go.dev/ref/spec#Conversions) another type if they have identical underlying types. 
-A non-native type is allowed be used if it can be convertible to *time.Time*, *big.Rat* or *avro.LogicalDuration* for the particular of *LogicalTypes*.
+One type can be [ConvertibleTo](https://go.dev/ref/spec#Conversions) another type if they have identical underlying types.
+A non-native type is allowed to be used if it can be convertible to *time.Time*, *big.Rat* or *avro.LogicalDuration* for the particular of *LogicalTypes*.
 
 Ex.: `type Timestamp time.Time`
+
+##### Custom Type Conversion
+
+In case of incompatible types, custom type conversion functions can be registered with the `RegisterTypeConverters` function.
+This requires the use of `map[string]any` or `[]any`.
+The type conversion for encoding will receive the original value that is to be encoded, and must return a data type that is compatible with the schema, as specified in the table above.
+The type conversion for decoding will receive the decoded value with a data type that is compatible with the schema, and its return value will be used as the final decoded value.
 
 ##### Untrusted Input With Bytes and Strings
 
@@ -187,6 +252,8 @@ Or use it as a lib in internal commands, it's the `gen` package
 
 ## Avro schema validation
 
+### avrosv
+
 A small Avro schema validation command-line utility is also available. This simple tool leverages the
 schema parsing functionality of the library, showing validation errors or optionally dumping parsed
 schemas to the console. It can be used in CI/CD pipelines to validate schema changes in a repository.
@@ -223,8 +290,28 @@ Check the options and usage with `-h`:
 avrosv -h
 ```
 
+### Name Validation
+
+Avro names are validated according to the
+[Avro specification](https://avro.apache.org/docs/1.11.1/specification/#names).
+
+However, the official Java library does not validate said names accordingly, resulting to some files out in the wild
+to have invalid names. Thus, this library has a configuration option to allow for these invalid names to be parsed.
+
+```go
+avro.SkipNameValidation = true
+```
+
+Note that this variable is global, so ideally you'd need to unset it after you're done with the invalid schema.
+
 ## Go Version Support
 
 This library supports the last two versions of Go. While the minimum Go version is
-not guarantee to increase along side Go, it may jump from time to time to support 
+not guaranteed to increase along side Go, it may jump from time to time to support
 additional features. This will be not be considered a breaking change.
+
+## Who uses hamba/avro?
+
+- [Apache Arrow for Go](https://github.com/apache/arrow-go)
+- [confluent-kafka-go](https://github.com/confluentinc/confluent-kafka-go)
+- [pulsar-client-go](https://github.com/apache/pulsar-client-go)

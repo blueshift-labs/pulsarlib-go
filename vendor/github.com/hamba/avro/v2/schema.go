@@ -16,14 +16,35 @@ import (
 	jsoniter "github.com/json-iterator/go"
 )
 
-var nullDefault = struct{}{}
+var jsoniterAPI = jsoniter.Config{
+	EscapeHTML:  true,
+	SortMapKeys: true,
+}.Froze()
+
+type nullDefaultType struct{}
+
+func (nullDefaultType) MarshalJSON() ([]byte, error) {
+	return []byte("null"), nil
+}
+
+var nullDefault nullDefaultType = struct{}{}
 
 var (
-	schemaReserved = []string{
-		"doc", "fields", "items", "name", "namespace", "size", "symbols",
-		"values", "type", "aliases", "logicalType", "precision", "scale",
+	// Note: order matches the order of properties as they are named in the spec.
+	// 	https://avro.apache.org/docs/1.12.0/specification
+	recordReserved               = []string{"type", "name", "namespace", "doc", "aliases", "fields"}
+	fieldReserved                = []string{"name", "doc", "type", "order", "aliases", "default"}
+	enumReserved                 = []string{"type", "name", "namespace", "aliases", "doc", "symbols", "default"}
+	arrayReserved                = []string{"type", "items"}
+	mapReserved                  = []string{"type", "values"}
+	fixedReserved                = []string{"type", "name", "namespace", "aliases", "size"}
+	fixedWithLogicalTypeReserved = []string{"type", "name", "namespace", "aliases", "size", "logicalType"}
+	fixedWithDecimalTypeReserved = []string{
+		"type", "name", "namespace", "aliases", "size", "logicalType", "precision", "scale",
 	}
-	fieldReserved = []string{"default", "doc", "name", "order", "type", "aliases"}
+	primitiveReserved                = []string{"type"}
+	primitiveWithLogicalTypeReserved = []string{"type", "logicalType"}
+	primitiveWithDecimalTypeReserved = []string{"type", "logicalType", "precision", "scale"}
 )
 
 // Type is a schema type.
@@ -90,9 +111,10 @@ type FingerprintType string
 
 // Fingerprint type constants.
 const (
-	CRC64Avro FingerprintType = "CRC64-AVRO"
-	MD5       FingerprintType = "MD5"
-	SHA256    FingerprintType = "SHA256"
+	CRC64Avro   FingerprintType = "CRC64-AVRO"
+	CRC64AvroLE FingerprintType = "CRC64-AVRO-LE"
+	MD5         FingerprintType = "MD5"
+	SHA256      FingerprintType = "SHA256"
 )
 
 // SchemaCache is a cache of schemas.
@@ -112,6 +134,17 @@ func (c *SchemaCache) Get(name string) Schema {
 	}
 
 	return nil
+}
+
+// AddAll adds all schemas from the given cache to the current cache.
+func (c *SchemaCache) AddAll(cache *SchemaCache) {
+	if cache == nil {
+		return
+	}
+	cache.cache.Range(func(key, value interface{}) bool {
+		c.cache.Store(key, value)
+		return true
+	})
 }
 
 // Schemas is a slice of Schemas.
@@ -290,6 +323,9 @@ func (f *fingerprinter) FingerprintUsing(typ FingerprintType, stringer fmt.Strin
 	case CRC64Avro:
 		h := crc64.Sum(data)
 		fingerprint = h[:]
+	case CRC64AvroLE:
+		h := crc64.SumWithByteOrder(data, crc64.LittleEndian)
+		fingerprint = h[:]
 	case MD5:
 		h := md5.Sum(data)
 		fingerprint = h[:]
@@ -366,6 +402,12 @@ func (p properties) Prop(name string) any {
 	return p.props[name]
 }
 
+// Props returns a map that contains all schema custom properties.
+// Any accidental change to the returned map will directly modify the schema custom properties.
+func (p properties) Props() map[string]any {
+	return p.props
+}
+
 func (p properties) marshalPropertiesToJSON(buf *bytes.Buffer) error {
 	sortedPropertyKeys := make([]string, 0, len(p.props))
 	for k := range p.props {
@@ -373,11 +415,11 @@ func (p properties) marshalPropertiesToJSON(buf *bytes.Buffer) error {
 	}
 	sort.Strings(sortedPropertyKeys)
 	for _, k := range sortedPropertyKeys {
-		vv, err := jsoniter.Marshal(p.props[k])
+		vv, err := jsoniterAPI.Marshal(p.props[k])
 		if err != nil {
 			return err
 		}
-		kk, err := jsoniter.Marshal(k)
+		kk, err := jsoniterAPI.Marshal(k)
 		if err != nil {
 			return err
 		}
@@ -470,9 +512,16 @@ func NewPrimitiveSchema(t Type, l LogicalSchema, opts ...SchemaOption) *Primitiv
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-
+	reservedProps := primitiveReserved
+	if l != nil {
+		if l.Type() == Decimal {
+			reservedProps = primitiveWithDecimalTypeReserved
+		} else {
+			reservedProps = primitiveWithLogicalTypeReserved
+		}
+	}
 	return &PrimitiveSchema{
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, reservedProps),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		typ:                t,
 		logical:            l,
@@ -501,7 +550,7 @@ func (s *PrimitiveSchema) String() string {
 // MarshalJSON marshals the schema to json.
 func (s *PrimitiveSchema) MarshalJSON() ([]byte, error) {
 	if s.logical == nil && len(s.props) == 0 {
-		return jsoniter.Marshal(s.typ)
+		return jsoniterAPI.Marshal(s.typ)
 	}
 
 	buf := new(bytes.Buffer)
@@ -562,7 +611,7 @@ func NewRecordSchema(name, namespace string, fields []*Field, opts ...SchemaOpti
 
 	return &RecordSchema{
 		name:               n,
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, recordReserved),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		fields:             fields,
 		doc:                cfg.doc,
@@ -624,7 +673,7 @@ func (s *RecordSchema) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"name":"` + s.full + `"`)
 	if len(s.aliases) > 0 {
-		aliasesJSON, err := jsoniter.Marshal(s.aliases)
+		aliasesJSON, err := jsoniterAPI.Marshal(s.aliases)
 		if err != nil {
 			return nil, err
 		}
@@ -632,7 +681,7 @@ func (s *RecordSchema) MarshalJSON() ([]byte, error) {
 		buf.Write(aliasesJSON)
 	}
 	if s.doc != "" {
-		docJSON, err := jsoniter.Marshal(s.doc)
+		docJSON, err := jsoniterAPI.Marshal(s.doc)
 		if err != nil {
 			return nil, err
 		}
@@ -644,7 +693,7 @@ func (s *RecordSchema) MarshalJSON() ([]byte, error) {
 	} else {
 		buf.WriteString(`,"type":"record"`)
 	}
-	fieldsJSON, err := jsoniter.Marshal(s.fields)
+	fieldsJSON, err := jsoniterAPI.Marshal(s.fields)
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +726,7 @@ func (s *RecordSchema) CacheFingerprint() [32]byte {
 			}
 			defs = append(defs, field.Default())
 		}
-		b, _ := jsoniter.Marshal(defs)
+		b, _ := jsoniterAPI.Marshal(defs)
 		return b
 	})
 }
@@ -821,7 +870,7 @@ func (f *Field) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"name":"` + f.name + `"`)
 	if len(f.aliases) > 0 {
-		aliasesJSON, err := jsoniter.Marshal(f.aliases)
+		aliasesJSON, err := jsoniterAPI.Marshal(f.aliases)
 		if err != nil {
 			return nil, err
 		}
@@ -829,21 +878,21 @@ func (f *Field) MarshalJSON() ([]byte, error) {
 		buf.Write(aliasesJSON)
 	}
 	if f.doc != "" {
-		docJSON, err := jsoniter.Marshal(f.doc)
+		docJSON, err := jsoniterAPI.Marshal(f.doc)
 		if err != nil {
 			return nil, err
 		}
 		buf.WriteString(`,"doc":`)
 		buf.Write(docJSON)
 	}
-	typeJSON, err := jsoniter.Marshal(f.typ)
+	typeJSON, err := jsoniterAPI.Marshal(f.typ)
 	if err != nil {
 		return nil, err
 	}
 	buf.WriteString(`,"type":`)
 	buf.Write(typeJSON)
 	if f.hasDef {
-		defaultValueJSON, err := jsoniter.Marshal(f.Default())
+		defaultValueJSON, err := jsoniterAPI.Marshal(f.Default())
 		if err != nil {
 			return nil, err
 		}
@@ -891,10 +940,17 @@ func NewEnumSchema(name, namespace string, symbols []string, opts ...SchemaOptio
 	if len(symbols) == 0 {
 		return nil, errors.New("avro: enum must have a non-empty array of symbols")
 	}
+
+	symbolNames := make(map[string]struct{})
 	for _, sym := range symbols {
 		if err = validateName(sym); err != nil {
 			return nil, fmt.Errorf("avro: invalid symbol %q", sym)
 		}
+
+		if _, exists := symbolNames[sym]; exists {
+			return nil, fmt.Errorf("avro: duplicate symbol %q", sym)
+		}
+		symbolNames[sym] = struct{}{}
 	}
 
 	var def string
@@ -907,7 +963,7 @@ func NewEnumSchema(name, namespace string, symbols []string, opts ...SchemaOptio
 
 	return &EnumSchema{
 		name:               n,
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, enumReserved),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		symbols:            symbols,
 		def:                def,
@@ -991,7 +1047,7 @@ func (s *EnumSchema) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"name":"` + s.full + `"`)
 	if len(s.aliases) > 0 {
-		aliasesJSON, err := jsoniter.Marshal(s.aliases)
+		aliasesJSON, err := jsoniterAPI.Marshal(s.aliases)
 		if err != nil {
 			return nil, err
 		}
@@ -999,7 +1055,7 @@ func (s *EnumSchema) MarshalJSON() ([]byte, error) {
 		buf.Write(aliasesJSON)
 	}
 	if s.doc != "" {
-		docJSON, err := jsoniter.Marshal(s.doc)
+		docJSON, err := jsoniterAPI.Marshal(s.doc)
 		if err != nil {
 			return nil, err
 		}
@@ -1007,7 +1063,7 @@ func (s *EnumSchema) MarshalJSON() ([]byte, error) {
 		buf.Write(docJSON)
 	}
 	buf.WriteString(`,"type":"enum"`)
-	symbolsJSON, err := jsoniter.Marshal(s.symbols)
+	symbolsJSON, err := jsoniterAPI.Marshal(s.symbols)
 	if err != nil {
 		return nil, err
 	}
@@ -1060,7 +1116,7 @@ func NewArraySchema(items Schema, opts ...SchemaOption) *ArraySchema {
 	}
 
 	return &ArraySchema{
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, arrayReserved),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		items:              items,
 	}
@@ -1085,7 +1141,7 @@ func (s *ArraySchema) String() string {
 func (s *ArraySchema) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"type":"array"`)
-	itemsJSON, err := jsoniter.Marshal(s.items)
+	itemsJSON, err := jsoniterAPI.Marshal(s.items)
 	if err != nil {
 		return nil, err
 	}
@@ -1130,7 +1186,7 @@ func NewMapSchema(values Schema, opts ...SchemaOption) *MapSchema {
 	}
 
 	return &MapSchema{
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, mapReserved),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		values:             values,
 	}
@@ -1155,7 +1211,7 @@ func (s *MapSchema) String() string {
 func (s *MapSchema) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"type":"map"`)
-	valuesJSON, err := jsoniter.Marshal(s.values)
+	valuesJSON, err := jsoniterAPI.Marshal(s.values)
 	if err != nil {
 		return nil, err
 	}
@@ -1228,7 +1284,13 @@ func (s *UnionSchema) Types() Schemas {
 	return s.types
 }
 
-// Nullable returns the Schema if the union is nullable, otherwise nil.
+// Contains returns true if the union contains the given type.
+func (s *UnionSchema) Contains(typ Type) bool {
+	_, pos := s.types.Get(string(typ))
+	return pos != -1
+}
+
+// Nullable returns true if the union is nullable, otherwise false.
 func (s *UnionSchema) Nullable() bool {
 	if len(s.types) != 2 || s.types[0].Type() != Null && s.types[1].Type() != Null {
 		return false
@@ -1265,7 +1327,7 @@ func (s *UnionSchema) String() string {
 
 // MarshalJSON marshals the schema to json.
 func (s *UnionSchema) MarshalJSON() ([]byte, error) {
-	return jsoniter.Marshal(s.types)
+	return jsoniterAPI.Marshal(s.types)
 }
 
 // Fingerprint returns the SHA256 fingerprint of the schema.
@@ -1311,9 +1373,21 @@ func NewFixedSchema(
 		return nil, err
 	}
 
+	if size < 0 {
+		return nil, errors.New("avro: fixed size cannot be negative")
+	}
+
+	reservedProps := fixedReserved
+	if logical != nil {
+		if logical.Type() == Decimal {
+			reservedProps = fixedWithDecimalTypeReserved
+		} else {
+			reservedProps = fixedWithLogicalTypeReserved
+		}
+	}
 	return &FixedSchema{
 		name:               n,
-		properties:         newProperties(cfg.props, schemaReserved),
+		properties:         newProperties(cfg.props, reservedProps),
 		cacheFingerprinter: cacheFingerprinter{writerFingerprint: cfg.wfp},
 		size:               size,
 		logical:            logical,
@@ -1352,7 +1426,7 @@ func (s *FixedSchema) MarshalJSON() ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(`{"name":"` + s.full + `"`)
 	if len(s.aliases) > 0 {
-		aliasesJSON, err := jsoniter.Marshal(s.aliases)
+		aliasesJSON, err := jsoniterAPI.Marshal(s.aliases)
 		if err != nil {
 			return nil, err
 		}
@@ -1394,7 +1468,20 @@ func (s *FixedSchema) CacheFingerprint() [32]byte {
 
 // NullSchema is an Avro null type schema.
 type NullSchema struct {
+	properties
 	fingerprinter
+}
+
+// NewNullSchema creates a new NullSchema.
+func NewNullSchema(opts ...SchemaOption) *NullSchema {
+	var cfg schemaConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	return &NullSchema{
+		properties: newProperties(cfg.props, primitiveReserved),
+	}
 }
 
 // Type returns the type of the schema.
@@ -1409,7 +1496,16 @@ func (s *NullSchema) String() string {
 
 // MarshalJSON marshals the schema to json.
 func (s *NullSchema) MarshalJSON() ([]byte, error) {
-	return []byte(`"null"`), nil
+	if len(s.props) == 0 {
+		return []byte(`"null"`), nil
+	}
+	buf := new(bytes.Buffer)
+	buf.WriteString(`{"type":"null"`)
+	if err := s.marshalPropertiesToJSON(buf); err != nil {
+		return nil, err
+	}
+	buf.WriteString("}")
+	return buf.Bytes(), nil
 }
 
 // Fingerprint returns the SHA256 fingerprint of the schema.
@@ -1547,6 +1643,10 @@ func invalidNameOtherChar(r rune) bool {
 func validateName(name string) error {
 	if name == "" {
 		return errors.New("name must be a non-empty")
+	}
+
+	if SkipNameValidation {
+		return nil
 	}
 
 	if strings.IndexFunc(name[:1], invalidNameFirstChar) > -1 {
@@ -1719,7 +1819,7 @@ func isValidDefaultBytes(def string) ([]byte, bool) {
 	runes := []rune(def)
 	l := len(runes)
 	b := make([]byte, l)
-	for i := 0; i < l; i++ {
+	for i := range l {
 		if runes[i] < 0 || runes[i] > 255 {
 			return nil, false
 		}

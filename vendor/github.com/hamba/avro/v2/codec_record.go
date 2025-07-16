@@ -76,9 +76,17 @@ func decoderOfStruct(d *decoderContext, schema Schema, typ reflect2.Type) ValDec
 				}
 			}
 		}
-
-		// Skip field if it doesnt exist
+		// Skip field if it doesn't exist
 		if sf == nil {
+			// If the field value doesn't exist in the binary, ignore it instead of
+			// appending a 'SkipDecoder'.
+			//
+			// Note: 'SkipDecoder' performs a read and moves the cursor, which,
+			// in this case, will lead to a dirty read.
+			if field.action == FieldSetDefault {
+				continue
+			}
+
 			fields = append(fields, &structFieldDecoder{
 				decoder: createSkipDecoder(field.Type()),
 			})
@@ -275,7 +283,7 @@ func decoderOfRecord(d *decoderContext, schema Schema, typ reflect2.Type) ValDec
 
 		fields[i] = recordMapDecoderField{
 			name:    field.Name(),
-			decoder: newEfaceDecoder(d, field.Type()),
+			decoder: decoderOfType(d, field.Type(), mapType.Elem()),
 		}
 	}
 
@@ -457,7 +465,7 @@ func describeStruct(tagKey string, typ reflect2.Type) *structDescriptor {
 			}
 			visited[rtype] = true
 
-			for i := 0; i < f.anon.NumField(); i++ {
+			for i := range f.anon.NumField() {
 				field := f.anon.Field(i).(*reflect2.UnsafeStructField)
 				isUnexported := field.PkgPath() != ""
 

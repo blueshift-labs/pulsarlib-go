@@ -19,13 +19,6 @@ func genericDecode(typ reflect2.Type, dec ValDecoder, r *Reader) any {
 	if reflect2.IsNil(obj) {
 		return nil
 	}
-
-	// Generic reader returns a different result from the
-	// codec in the case of a big.Rat. Handle this.
-	if typ.Type1() == ratType {
-		dec := obj.(big.Rat)
-		return &dec
-	}
 	return obj
 }
 
@@ -46,6 +39,8 @@ func genericReceiver(schema Schema) (reflect2.Type, error) {
 	}
 
 	switch schema.Type() {
+	case Null:
+		return reflect2.TypeOf((*null)(nil)), nil
 	case Boolean:
 		var v bool
 		return reflect2.TypeOf(v), nil
@@ -125,7 +120,7 @@ func genericReceiver(schema Schema) (reflect2.Type, error) {
 				var v LogicalDuration
 				return reflect2.TypeOf(v), nil
 			case Decimal:
-				var v big.Rat
+				var v *big.Rat
 				return reflect2.TypeOf(v), nil
 			}
 		}

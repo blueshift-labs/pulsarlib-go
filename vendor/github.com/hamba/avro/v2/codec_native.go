@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"reflect"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -21,10 +22,15 @@ func createDecoderOfNative(schema *PrimitiveSchema, typ reflect2.Type) ValDecode
 		return &boolCodec{}
 
 	case reflect.Int:
-		if schema.Type() != Int {
-			break
+		switch schema.Type() {
+		case Int:
+			return &intCodec[int]{}
+		case Long:
+			if strconv.IntSize == 64 {
+				// allow decoding into int when it's 64-bit
+				return &longCodec[int]{}
+			}
 		}
-		return &intCodec[int]{}
 
 	case reflect.Int8:
 		if schema.Type() != Int {
@@ -77,15 +83,16 @@ func createDecoderOfNative(schema *PrimitiveSchema, typ reflect2.Type) ValDecode
 				convert: createLongConverter(schema.encodedType),
 			}
 
-		case st == Long && lt == "":
+		case st == Long:
+			isTimestamp := (lt == TimestampMillis || lt == TimestampMicros)
+			if isTimestamp && typ.Type1() == timeDurationType {
+				return &errorDecoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s and logicalType %s",
+					typ.Type1().String(), schema.Type(), lt)}
+			}
 			if resolved {
 				return &longConvCodec[int64]{convert: createLongConverter(schema.encodedType)}
 			}
 			return &longCodec[int64]{}
-
-		case lt != "":
-			return &errorDecoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s and logicalType %s",
-				typ.String(), schema.Type(), lt)}
 
 		default:
 			break
@@ -157,12 +164,12 @@ func createDecoderOfNative(schema *PrimitiveSchema, typ reflect2.Type) ValDecode
 	case reflect.Ptr:
 		ptrType := typ.(*reflect2.UnsafePtrType)
 		elemType := ptrType.Elem()
-		tpy1 := elemType.Type1()
+		typ1 := elemType.Type1()
 		ls := getLogicalSchema(schema)
 		if ls == nil {
 			break
 		}
-		if !tpy1.ConvertibleTo(ratType) || schema.Type() != Bytes || ls.Type() != Decimal {
+		if !typ1.ConvertibleTo(ratType) || schema.Type() != Bytes || ls.Type() != Decimal {
 			break
 		}
 		dec := ls.(*DecimalLogicalSchema)
@@ -174,7 +181,7 @@ func createDecoderOfNative(schema *PrimitiveSchema, typ reflect2.Type) ValDecode
 }
 
 //nolint:maintidx // Splitting this would not make it simpler.
-func createEncoderOfNative(schema Schema, typ reflect2.Type) ValEncoder {
+func createEncoderOfNative(schema *PrimitiveSchema, typ reflect2.Type) ValEncoder {
 	switch typ.Kind() {
 	case reflect.Bool:
 		if schema.Type() != Boolean {
@@ -183,10 +190,12 @@ func createEncoderOfNative(schema Schema, typ reflect2.Type) ValEncoder {
 		return &boolCodec{}
 
 	case reflect.Int:
-		if schema.Type() != Int {
-			break
+		switch schema.Type() {
+		case Int:
+			return &intCodec[int]{}
+		case Long:
+			return &longCodec[int]{}
 		}
-		return &intCodec[int]{}
 
 	case reflect.Int8:
 		if schema.Type() != Int {
@@ -237,12 +246,13 @@ func createEncoderOfNative(schema Schema, typ reflect2.Type) ValEncoder {
 		case st == Long && lt == TimeMicros: // time.Duration
 			return &timeMicrosCodec{}
 
-		case st == Long && lt == "":
+		case st == Long:
+			isTimestamp := (lt == TimestampMillis || lt == TimestampMicros)
+			if isTimestamp && typ.Type1() == timeDurationType {
+				return &errorEncoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s and logicalType %s",
+					typ.Type1().String(), schema.Type(), lt)}
+			}
 			return &longCodec[int64]{}
-
-		case lt != "":
-			return &errorEncoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s and logicalType %s",
-				typ.String(), schema.Type(), lt)}
 
 		default:
 			break
@@ -300,21 +310,17 @@ func createEncoderOfNative(schema Schema, typ reflect2.Type) ValEncoder {
 	case reflect.Ptr:
 		ptrType := typ.(*reflect2.UnsafePtrType)
 		elemType := ptrType.Elem()
-		tpy1 := elemType.Type1()
+		typ1 := elemType.Type1()
 		ls := getLogicalSchema(schema)
 		if ls == nil {
 			break
 		}
-		if !tpy1.ConvertibleTo(ratType) || schema.Type() != Bytes || ls.Type() != Decimal {
+		if !typ1.ConvertibleTo(ratType) || schema.Type() != Bytes || ls.Type() != Decimal {
 			break
 		}
 		dec := ls.(*DecimalLogicalSchema)
 
 		return &bytesDecimalPtrCodec{prec: dec.Precision(), scale: dec.Scale()}
-	}
-
-	if schema.Type() == Null {
-		return &nullCodec{}
 	}
 
 	return &errorEncoder{err: fmt.Errorf("avro: %s is unsupported for Avro %s", typ.String(), schema.Type())}
@@ -339,6 +345,8 @@ func getLogicalType(schema Schema) LogicalType {
 }
 
 type nullCodec struct{}
+
+func (*nullCodec) Decode(unsafe.Pointer, *Reader) {}
 
 func (*nullCodec) Encode(unsafe.Pointer, *Writer) {}
 
@@ -367,7 +375,7 @@ func (*intCodec[T]) Encode(ptr unsafe.Pointer, w *Writer) {
 }
 
 type largeInt interface {
-	~int32 | ~uint32 | int64
+	~int | ~int32 | ~uint32 | int64
 }
 
 type longCodec[T largeInt] struct{}
@@ -584,7 +592,7 @@ func (c *bytesDecimalCodec) Decode(ptr unsafe.Pointer, r *Reader) {
 	if i := (&big.Int{}).SetBytes(b); len(b) > 0 && b[0]&0x80 > 0 {
 		i.Sub(i, new(big.Int).Lsh(one, uint(len(b))*8))
 	}
-	*((*big.Rat)(ptr)) = *ratFromBytes(b, c.scale)
+	*((**big.Rat)(ptr)) = ratFromBytes(b, c.scale)
 }
 
 func ratFromBytes(b []byte, scale int) *big.Rat {
