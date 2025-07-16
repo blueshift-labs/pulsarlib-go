@@ -1,6 +1,6 @@
 module github.com/blueshift-labs/pulsarlib-go
 
-go 1.20
+go 1.24
 
 require (
 	github.com/apache/pulsar-client-go v0.13.0
