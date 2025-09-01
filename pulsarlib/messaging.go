@@ -248,7 +248,7 @@ func (c *consumer) messageFetcher() {
 
 func (c *consumer) Start() error {
 	if c.stopConsumer {
-		return fmt.Errorf("Cannot start a stopped consumer")
+		return fmt.Errorf("cannot start a stopped consumer")
 	}
 
 	if c.consumerRunning {
@@ -354,7 +354,7 @@ func InitMessaging(workerCount int, host string, dataPort int, httpPort int) err
 		ConnectionTimeout: 30 * time.Second,
 	})
 	if err != nil {
-		return fmt.Errorf("Could not instantiate Pulsar client: %v", err)
+		return fmt.Errorf("could not instantiate Pulsar client: %v", err)
 	}
 
 	msging.client = client
@@ -431,7 +431,7 @@ func CreateConsumer(tenantID, namespace string, topics []string, handler Handler
 	}
 	c, err := msging.client.Subscribe(consumerOptions)
 	if err != nil {
-		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
+		return nil, fmt.Errorf("error in subscribing to the topics. Error %v", err)
 	}
 
 	ctx, canc := context.WithCancel(context.Background())
@@ -487,7 +487,7 @@ func CreateSingleTopicConsumer(tenantID, namespace, topic string, handler Handle
 
 	c, err := msging.client.Subscribe(consumerOptions)
 	if err != nil {
-		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
+		return nil, fmt.Errorf("error in subscribing to the topics. Error %v", err)
 	}
 
 	ctx, canc := context.WithCancel(context.Background())
@@ -548,7 +548,7 @@ func CreateRegexConsumer(tenantID, namespace, topicsPattern string, handler Hand
 		SubscriptionInitialPosition: toInitialPosition(opts.InitialPosition),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Error in subscribing to the topics. Error %v", err)
+		return nil, fmt.Errorf("error in subscribing to the topics. Error %v", err)
 	}
 
 	ctx, canc := context.WithCancel(context.Background())
@@ -589,7 +589,7 @@ func CreateProducer(tenantID string, namespace string, topic string) (Producer, 
 		DisableBlockIfQueueFull: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Error in creating producer. Error %v", err)
+		return nil, fmt.Errorf("error in creating producer. Error %v", err)
 	}
 
 	producer := &producer{

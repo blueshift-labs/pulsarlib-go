@@ -168,7 +168,7 @@ func SetNamespaceRetention(tenantID string, namespace string, retentionInMB int6
 	}
 	body, err := json.Marshal(r)
 	if err != nil {
-		return fmt.Errorf("Error creating request body for updating retetion")
+		return fmt.Errorf("error creating request body for updating retention")
 	}
 	req, err := http.NewRequest(http.MethodPost, updateURL, bytes.NewBuffer(body))
 	if err != nil {
@@ -769,7 +769,7 @@ func GetStatsForPartitionedTopic(tenantID string, namespace string, topic string
 
 	if resp.StatusCode >= 400 {
 		if err != nil {
-			return nil, fmt.Errorf("error while getting stats for partitioned topic; error occurred while attempting to read the response body; status code %d, err [%s]", err.Error(), resp.StatusCode)
+			return nil, fmt.Errorf("error while getting stats for partitioned topic; error occurred while attempting to read the response body; status code %d, err [%s]", resp.StatusCode, err.Error())
 		}
 		return nil, fmt.Errorf("status code %d while getting stats for partitioned topic - %s", resp.StatusCode, string(respBuf))
 	}
