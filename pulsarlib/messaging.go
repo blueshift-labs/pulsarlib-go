@@ -19,9 +19,17 @@ type RetryMessage struct {
 }
 
 type Message struct {
+	metadata
+
+	ID         string
 	Key        string
 	Value      []byte
 	Properties map[string]string
+}
+
+type metadata struct {
+	PublishTime time.Time
+	EventTime   time.Time
 }
 
 type Stats struct {
@@ -153,9 +161,14 @@ func (p *producer) Stop() {
 func (m *messaging) processMessageWorker() {
 	for messageItem := range m.messageCh {
 		m := &Message{
+			ID:         messageItem.message.ID().String(),
 			Key:        messageItem.message.Key(),
 			Value:      messageItem.message.Payload(),
 			Properties: messageItem.message.Properties(),
+			metadata: metadata{
+				PublishTime: messageItem.message.PublishTime(),
+				EventTime:   messageItem.message.EventTime(),
+			},
 		}
 		retry := messageItem.handler.HandleMessage(m)
 		if retry != nil {
@@ -182,9 +195,14 @@ func (c *consumer) pauseWait() {
 func (c *consumer) processMessageWorker() {
 	for messageItem := range c.messageCh {
 		m := &Message{
+			ID:         messageItem.message.ID().String(),
 			Key:        messageItem.message.Key(),
 			Value:      messageItem.message.Payload(),
 			Properties: messageItem.message.Properties(),
+			metadata: metadata{
+				PublishTime: messageItem.message.PublishTime(),
+				EventTime:   messageItem.message.EventTime(),
+			},
 		}
 		retry := messageItem.handler.HandleMessage(m)
 		if retry != nil {
